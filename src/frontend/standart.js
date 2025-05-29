@@ -59,152 +59,146 @@ function checkForNewTimePeriod() {
     if (!timePresetValue || !startTime || !endTime || !workingModeValue) return false;
 
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startDay = new Date(startTime.getFullYear(), startTime.getMonth(), startTime.getDate());
-
-    // Only check for updates if we're viewing today's data OR if it's a test scenario
-    // Allow test scenarios by checking if the date is in the future (test dates) or today
-    const isTestScenario = startDay.getTime() > today.getTime();
-    const isToday = startDay.getTime() === today.getTime();
-    
-    if (!isToday && !isTestScenario) {
-        return false;  // Don't update if viewing historical data (past dates)
-    }
-
     const currentHour = now.getHours();
-    const shifts = workingModes[workingModeValue].shifts;
-    const currentShiftConfig = shifts.find(s => s.id === timePresetValue);
     
-    if (!currentShiftConfig) return false;
-
-    // Check if we're currently in the expected shift
-    let isInCurrentShift = false;
-    
-    if (currentShiftConfig.crossesMidnight) {
-        // For shifts that cross midnight
-        isInCurrentShift = (currentHour >= currentShiftConfig.start) || (currentHour < currentShiftConfig.end);
-    } else {
-        // For regular shifts
-        isInCurrentShift = (currentHour >= currentShiftConfig.start) && (currentHour < currentShiftConfig.end);
+    // Simple, direct shift boundary detection for Mode 1
+    if (workingModeValue === 'mode1') {
+        // Shift 1 (08:00-16:00) → Shift 2 (16:00-24:00)
+        if (timePresetValue === 'shift1' && currentHour >= 16) {
+            console.log('[SHIFT CHANGE] 16:00 boundary detected - Shift 1 → Shift 2');
+            return true;
+        }
+        
+        // Shift 2 (16:00-24:00) → Shift 3 (00:00-08:00)
+        if (timePresetValue === 'shift2' && (currentHour >= 24 || currentHour === 0)) {
+            console.log('[SHIFT CHANGE] 00:00 boundary detected - Shift 2 → Shift 3');
+            return true;
+        }
+        
+        // Shift 3 (00:00-08:00) → Shift 1 (08:00-16:00)
+        if (timePresetValue === 'shift3' && currentHour >= 8) {
+            console.log('[SHIFT CHANGE] 08:00 boundary detected - Shift 3 → Shift 1');
+            return true;
+        }
     }
     
-    // If we're not in the current shift anymore, we need to update
-    if (!isInCurrentShift) {
-        return true;
+    // Mode 2 shift boundaries
+    if (workingModeValue === 'mode2') {
+        // Shift 1 (08:00-18:00) → Shift 2 (20:00-08:00)
+        if (timePresetValue === 'shift1' && currentHour >= 18) {
+            console.log('[SHIFT CHANGE] 18:00 boundary detected - Mode 2 Shift 1 → Shift 2');
+            return true;
+        }
+        
+        // Shift 2 (20:00-08:00) → Shift 1 (08:00-18:00)
+        if (timePresetValue === 'shift2' && currentHour >= 8 && currentHour < 18) {
+            console.log('[SHIFT CHANGE] 08:00 boundary detected - Mode 2 Shift 2 → Shift 1');
+            return true;
+        }
     }
     
-    // Check if the start time needs to be updated for midnight-crossing shifts
-    if (currentShiftConfig.crossesMidnight) {
-        const expectedStartTime = getShiftStartTime(currentShiftConfig, now);
-        return Math.abs(startTime.getTime() - expectedStartTime.getTime()) > 60000; // More than 1 minute difference
+    // Mode 3 shift boundaries  
+    if (workingModeValue === 'mode3') {
+        // Shift 1 (08:00-20:00) → Shift 2 (20:00-08:00)
+        if (timePresetValue === 'shift1' && currentHour >= 20) {
+            console.log('[SHIFT CHANGE] 20:00 boundary detected - Mode 3 Shift 1 → Shift 2');
+            return true;
+        }
+        
+        // Shift 2 (20:00-08:00) → Shift 1 (08:00-20:00)
+        if (timePresetValue === 'shift2' && currentHour >= 8 && currentHour < 20) {
+            console.log('[SHIFT CHANGE] 08:00 boundary detected - Mode 3 Shift 2 → Shift 1');
+            return true;
+        }
     }
     
     return false;
 }
 
-// Helper function to get the correct start time for a shift
-function getShiftStartTime(shiftConfig, referenceTime) {
-    const today = new Date(referenceTime.getFullYear(), referenceTime.getMonth(), referenceTime.getDate());
-    const currentHour = referenceTime.getHours();
-    
-    if (shiftConfig.crossesMidnight) {
-        if (currentHour >= shiftConfig.start) {
-            // We're in the first part of the shift (before midnight)
-            return new Date(today.setHours(shiftConfig.start, 0, 0, 0));
-        } else if (currentHour < shiftConfig.end) {
-            // We're in the second part of the shift (after midnight)
-            const yesterday = new Date(today);
-            yesterday.setDate(yesterday.getDate() - 1);
-            return new Date(yesterday.setHours(shiftConfig.start, 0, 0, 0));
-        }
-    }
-    
-    // For regular shifts or when between shifts
-    return new Date(today.setHours(shiftConfig.start, 0, 0, 0));
-}
-
 // Function to update time period
 function updateTimePeriod() {
     const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-    // Only update if we're viewing today's data OR if it's a test scenario
-    const startDay = new Date(startTime.getFullYear(), startTime.getMonth(), startTime.getDate());
-    const isTestScenario = startDay.getTime() > today.getTime();
-    const isToday = startDay.getTime() === today.getTime();
-    
-    if (!isToday && !isTestScenario) {
-        return;  // Don't update if viewing historical data (past dates)
-    }
-
     const currentHour = now.getHours();
-    const shifts = workingModes[workingModeValue].shifts;
     
-    // Find which shift we should be in now
-    let currentShiftConfig = null;
-    for (const shift of shifts) {
-        if (shift.crossesMidnight) {
-            if ((currentHour >= shift.start) || (currentHour < shift.end)) {
-                currentShiftConfig = shift;
-                break;
-            }
+    console.log('[SHIFT CHANGE] Executing shift change automation...');
+    
+    // Determine new shift based on current hour and mode
+    let newShift = '';
+    let newStartHour = 0;
+    
+    if (workingModeValue === 'mode1') {
+        if (currentHour >= 16 && currentHour < 24) {
+            newShift = 'shift2';
+            newStartHour = 16;
+        } else if (currentHour >= 0 && currentHour < 8) {
+            newShift = 'shift3';
+            newStartHour = 0;
+        } else if (currentHour >= 8 && currentHour < 16) {
+            newShift = 'shift1';
+            newStartHour = 8;
+        }
+    } else if (workingModeValue === 'mode2') {
+        if (currentHour >= 8 && currentHour < 18) {
+            newShift = 'shift1';
+            newStartHour = 8;
         } else {
-            if ((currentHour >= shift.start) && (currentHour < shift.end)) {
-                currentShiftConfig = shift;
-                break;
-            }
+            newShift = 'shift2';
+            newStartHour = 20;
+        }
+    } else if (workingModeValue === 'mode3') {
+        if (currentHour >= 8 && currentHour < 20) {
+            newShift = 'shift1';
+            newStartHour = 8;
+        } else {
+            newShift = 'shift2';
+            newStartHour = 20;
         }
     }
     
-    if (!currentShiftConfig) {
-        return; // No active shift found
-    }
+    // Update global variables
+    timePresetValue = newShift;
+    startTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), newStartHour, 0, 0, 0);
+    endTime = now;
     
-    // Update the preset value if it changed
-    if (timePresetValue !== currentShiftConfig.id) {
-        timePresetValue = currentShiftConfig.id;
-    }
+    console.log(`[SHIFT CHANGE] Updated to ${newShift}:`);
+    console.log(`  timePresetValue: ${timePresetValue}`);
+    console.log(`  startTime: ${startTime.toISOString()}`);
+    console.log(`  endTime: ${endTime.toISOString()}`);
     
-    // Calculate new start time
-    const newStartTime = getShiftStartTime(currentShiftConfig, now);
+    // Update the time display
+    updateTimeDisplay();
     
-    // Only update if the new start time is different
-    if (newStartTime && newStartTime.getTime() !== startTime.getTime()) {
-        startTime = newStartTime;
-        endTime = now;
-        
-        // Update the time display
-        updateTimeDisplay();
-        
-        // Close existing WebSocket connections to restart with new time parameters
-        for (const unitName in unitSockets) {
-            if (unitSockets[unitName]) {
-                unitSockets[unitName].close();
-                delete unitSockets[unitName];
-            }
+    // Close existing WebSocket connections
+    console.log('[SHIFT CHANGE] Closing existing WebSocket connections...');
+    for (const unitName in unitSockets) {
+        if (unitSockets[unitName]) {
+            unitSockets[unitName].close();
+            delete unitSockets[unitName];
         }
-        
-        // Clear existing unit data
-        unitData = {};
-        allConnectionsEstablished = false;
-        
-        // Clear existing tables to force recreation with fresh data
-        unitsContainer.innerHTML = '';
-        
-        // Reset summary display
-        summaryContainer.classList.add('hidden');
-        totalSuccess.textContent = '-';
-        totalFail.textContent = '-';
-        totalQuality.textContent = '-';
-        totalPerformance.textContent = '-';
-        
-        // Clear elements to flash array
-        elementsToFlashOnUpdate = [];
-        
-        // Reload data with new time period
-        loadData();
-        console.log('Time period updated:', formatDateForDisplay(startTime), 'to', formatDateForDisplay(endTime));
     }
+    
+    // Clear existing unit data
+    unitData = {};
+    allConnectionsEstablished = false;
+    
+    // Clear existing tables to force recreation with fresh data
+    unitsContainer.innerHTML = '';
+    
+    // Reset summary display
+    summaryContainer.classList.add('hidden');
+    totalSuccess.textContent = '-';
+    totalFail.textContent = '-';
+    totalQuality.textContent = '-';
+    totalPerformance.textContent = '-';
+    
+    // Clear elements to flash array
+    elementsToFlashOnUpdate = [];
+    
+    // Reload data with new time period
+    console.log('[SHIFT CHANGE] Reloading data for new shift...');
+    loadData();
+    
+    console.log(`[SHIFT CHANGE] ✅ COMPLETE - Now on ${newShift}`);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -292,7 +286,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const currentShiftConfig = shifts.find(s => s.id === timePresetValue);
             console.log(`[DEBUG] No shift change needed. Current hour: ${currentHour}, Current preset: ${timePresetValue}, Expected shift: ${currentShiftConfig?.name || 'Unknown'}`);
         }
-    }, 60000); // Check every minute
+    }, 10000); // Check every 10 seconds for aggressive detection
     
     // Clean up WebSocket connections when page unloads
     window.addEventListener('beforeunload', () => {
