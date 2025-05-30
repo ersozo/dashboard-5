@@ -27,6 +27,8 @@ let allConnectionsEstablished = false;
 let lastUpdateTime = null;
 // Store elements that need to flash on update
 let elementsToFlashOnUpdate = [];
+// Flag to prevent old WebSocket data processing during shift changes
+let isShiftChangeInProgress = false;
 
 // Working mode configurations (same as in app.js and hourly.js)
 const workingModes = {
@@ -122,6 +124,9 @@ function updateTimePeriod() {
     
     console.log('[SHIFT CHANGE] Executing shift change automation...');
     
+    // Set flag to prevent old WebSocket data from being processed
+    isShiftChangeInProgress = true;
+    
     // Determine new shift based on current hour and mode
     let newShift = '';
     let newStartHour = 0;
@@ -168,10 +173,12 @@ function updateTimePeriod() {
     // Update the time display
     updateTimeDisplay();
     
-    // Close existing WebSocket connections
+    // Close existing WebSocket connections and mark them as invalid
     console.log('[SHIFT CHANGE] Closing existing WebSocket connections...');
     for (const unitName in unitSockets) {
         if (unitSockets[unitName]) {
+            // Mark the connection as invalid before closing
+            unitSockets[unitName]._isInvalid = true;
             unitSockets[unitName].close();
             delete unitSockets[unitName];
         }
@@ -197,6 +204,12 @@ function updateTimePeriod() {
     // Reload data with new time period
     console.log('[SHIFT CHANGE] Reloading data for new shift...');
     loadData();
+    
+    // Reset the shift change flag after a short delay to allow new connections to establish
+    setTimeout(() => {
+        isShiftChangeInProgress = false;
+        console.log('[SHIFT CHANGE] Shift change process completed');
+    }, 2000);
     
     console.log(`[SHIFT CHANGE] ✅ COMPLETE - Now on ${newShift}`);
 }
@@ -473,6 +486,12 @@ function processUnitData(unit, data) {
 
 // Update UI with current data
 function updateUI() {
+    // Skip UI updates during shift change to prevent old data from showing
+    if (isShiftChangeInProgress) {
+        console.log('[SHIFT CHANGE] Skipping UI update during shift change');
+        return;
+    }
+    
     // Update summary first
     updateSummary(Object.values(unitData).flat());
     
@@ -545,6 +564,12 @@ function updateUI() {
 
 // Create tables for each unit
 function createUnitTables(unitDataMap) {
+    // Skip table creation during shift change to prevent old data from showing
+    if (isShiftChangeInProgress) {
+        console.log('[SHIFT CHANGE] Skipping table creation during shift change');
+        return;
+    }
+    
     unitsContainer.innerHTML = '';
     
     let unitCount = 0;
@@ -708,6 +733,22 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     let hasReceivedInitialData = false;
     
     function sendDataRequest() {
+        // Check if this connection is marked as invalid (from previous shift)
+        if (unitSocket._isInvalid) {
+            console.log(`[SHIFT CHANGE] Stopping data requests from invalid connection for "${unitName}"`);
+            if (updateInterval) {
+                clearInterval(updateInterval);
+                updateInterval = null;
+            }
+            return;
+        }
+        
+        // Check if shift change is in progress
+        if (isShiftChangeInProgress) {
+            console.log(`[SHIFT CHANGE] Skipping data request during shift change for "${unitName}"`);
+            return;
+        }
+        
         if (unitSocket.readyState === WebSocket.OPEN) {
             // Show the updating indicator
             showUpdatingIndicator();
@@ -767,6 +808,18 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     
     unitSocket.onmessage = (event) => {
         try {
+            // Check if this connection is marked as invalid (from previous shift)
+            if (unitSocket._isInvalid) {
+                console.log(`[SHIFT CHANGE] Ignoring data from invalid connection for "${unitName}"`);
+                return;
+            }
+            
+            // Check if shift change is in progress and this might be old data
+            if (isShiftChangeInProgress) {
+                console.log(`[SHIFT CHANGE] Ignoring data during shift change for "${unitName}"`);
+                return;
+            }
+            
             const data = JSON.parse(event.data);
             
             // Check if response contains an error
