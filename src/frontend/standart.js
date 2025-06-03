@@ -838,7 +838,7 @@ function createUnitTables(unitDataMap) {
             performanceCell.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-500';
             performanceCell.id = `performance-${unit.replace(/\s+/g, '-')}-${model.model.replace(/\s+/g, '-')}`;
             const performance = (model.performance !== undefined && model.performance !== null) 
-                ? (model.performance * 100).toFixed(1) 
+                ? (model.performance * 100).toFixed(2) 
                 : '-';
             performanceCell.textContent = performance;
                 row.appendChild(performanceCell);
@@ -1196,7 +1196,7 @@ function updateSummary() {
     }
     
     const oldTotalPerformance = totalPerformance.textContent;
-    const newTotalPerformance = (overallPerformance * 100).toFixed(1);
+    const newTotalPerformance = (overallPerformance * 100).toFixed(0);
     if (oldTotalPerformance !== newTotalPerformance) {
         totalPerformance.textContent = newTotalPerformance;
         elementsToFlashOnUpdate.push(totalPerformance);

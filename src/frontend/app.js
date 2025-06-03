@@ -187,7 +187,7 @@ function validateDataRetention(startTime, endTime) {
             minute: '2-digit'
         });
         
-        alert(`⚠️ Uyarı: Veritabanında son 5 günlük veri işlenmektedir.\n\nSeçilen başlangıç tarihi 5 günden eski: ${startTimeStr}\n\nLütfen ${fiveDaysAgoStr} tarihinden sonra bir zaman aralığı seçiniz.`);
+        alert(`⚠️ Uyarı: Veritabanında son 5 günlük veri işlenmektedir.\n\nSeçilen başlangıç tarihi ${fiveDaysAgoStr}'den eski.\n\nLütfen ${fiveDaysAgoStr} tarihinden sonra bir zaman aralığı seçiniz.`);
         return false;
     }
     

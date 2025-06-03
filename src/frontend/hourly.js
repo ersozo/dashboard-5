@@ -369,7 +369,7 @@ function updateCurrentTime() {
     
     if (isHistorical) {
         // For historical data, show the title instead of current time
-        currentTimeDisplay.textContent = 'SAATLİK ÜRETİM DURUMU';
+        currentTimeDisplay.textContent = 'SAATLİK ÜRETİM SAYILARI';
         currentTimeDisplay.style.fontSize = '4rem'; // Smaller font for the title
     } else {
         // For live data, show current time

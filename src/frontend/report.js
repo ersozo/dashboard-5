@@ -709,7 +709,7 @@ function updateSummaryStatistics(unitMetrics) {
     
     const avgPerformanceElement = document.getElementById('avg-performance');
     const oldAvgPerformance = avgPerformanceElement.textContent;
-    const newAvgPerformance = avgPerformance.toFixed(1);
+    const newAvgPerformance = avgPerformance.toFixed(0);
     if (oldAvgPerformance !== newAvgPerformance) {
         avgPerformanceElement.textContent = newAvgPerformance;
         elementsToFlashOnUpdate.push(avgPerformanceElement);
