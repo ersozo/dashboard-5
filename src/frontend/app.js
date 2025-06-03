@@ -84,7 +84,7 @@ function populateShifts(workingMode = 'mode1') {
     
     shifts.forEach(shift => {
         const shiftElement = document.createElement('div');
-        shiftElement.className = 'flex items-center px-3 py-2 border border-gray-300 rounded-md bg-white';
+        shiftElement.className = 'flex items-center px-3 py-2 border border-gray-300 rounded-md bg-white hover:border-blue-600';
         
         const radio = document.createElement('input');
         radio.type = 'radio';
@@ -162,6 +162,58 @@ function formatDateTimeForInput(date) {
 // Parse datetime-local input value to Date object
 function parseInputDateTime(inputValue) {
     return inputValue ? new Date(inputValue) : null;
+}
+
+// Validate if selected time range is within 5-day data retention limit
+function validateDataRetention(startTime, endTime) {
+    const now = new Date();
+    const fiveDaysAgo = new Date(now.getTime() - (5 * 24 * 60 * 60 * 1000)); // 5 days in milliseconds
+    
+    // Check if start time is more than 5 days old
+    if (startTime < fiveDaysAgo) {
+        const fiveDaysAgoStr = fiveDaysAgo.toLocaleDateString('tr-TR', {
+            day: '2-digit',
+            month: '2-digit', 
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        
+        const startTimeStr = startTime.toLocaleDateString('tr-TR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric', 
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        
+        alert(`⚠️ Uyarı: Veritabanında son 5 günlük veri işlenmektedir.\n\nSeçilen başlangıç tarihi 5 günden eski: ${startTimeStr}\n\nLütfen ${fiveDaysAgoStr} tarihinden sonra bir zaman aralığı seçiniz.`);
+        return false;
+    }
+    
+    // Check if end time is more than 5 days old  
+    if (endTime < fiveDaysAgo) {
+        const fiveDaysAgoStr = fiveDaysAgo.toLocaleDateString('tr-TR', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit', 
+            minute: '2-digit'
+        });
+        
+        const endTimeStr = endTime.toLocaleDateString('tr-TR', {
+            day: '2-digit',
+            month: '2-digit', 
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        
+        alert(`⚠️ Uyarı: Veritabanı sadece son 5 günlük veriyi saklıyor.\n\nSeçilen bitiş tarihi çok eski: ${endTimeStr}\n\nLütfen ${fiveDaysAgoStr} tarihinden sonra bir zaman aralığı seçiniz.`);
+        return false;
+    }
+    
+    return true;
 }
 
 // Fetch production units on page load
@@ -359,6 +411,11 @@ standardViewBtn.addEventListener('click', () => {
         return;
     }
     
+    // Check 5-day data retention limit
+    if (!validateDataRetention(startTime, endTime)) {
+        return;
+    }
+    
     if (selectedUnits.length === 0) {
         alert('Lütfen en az bir üretim yerini seçiniz');
         return;
@@ -410,6 +467,11 @@ hourlyViewBtn.addEventListener('click', () => {
         return;
     }
     
+    // Check 5-day data retention limit
+    if (!validateDataRetention(startTime, endTime)) {
+        return;
+    }
+    
     if (selectedUnits.length === 0) {
         alert('Lütfen en az bir üretim yerini seçiniz');
         return;
@@ -458,6 +520,11 @@ reportViewBtn.addEventListener('click', () => {
     
     if (!startTime || !endTime) {
         alert('Lütfen geçerli bir başlangıç ve bitiş zamanı seçiniz');
+        return;
+    }
+    
+    // Check 5-day data retention limit
+    if (!validateDataRetention(startTime, endTime)) {
         return;
     }
     

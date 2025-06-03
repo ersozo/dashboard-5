@@ -60,7 +60,17 @@ const workingModes = {
 function checkForNewTimePeriod() {
     if (!timePresetValue || !startTime || !endTime || !workingModeValue) return false;
 
+    // Check if user is viewing historical data
+    // If the end time is more than 5 minutes in the past, consider it historical
     const now = new Date();
+    const timeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+    
+    if (timeDifference > fiveMinutesInMs) {
+        console.log('[HISTORICAL DATA] User is viewing historical data, skipping automatic shift change');
+        return false;
+    }
+
     const currentHour = now.getHours();
     
     // Simple, direct shift boundary detection for Mode 1
@@ -259,13 +269,27 @@ document.addEventListener('DOMContentLoaded', () => {
     timePresetValue = params.get('preset') || '';
     workingModeValue = params.get('workingMode') || 'mode1'; // Default to mode1 if not specified
     
+    console.log('=== URL PARAMETER PARSING DEBUG ===');
+    console.log('All URL params:', params.toString());
+    console.log('Start param (raw):', startParam);
+    console.log('End param (raw):', endParam);
+    console.log('Selected units:', selectedUnits);
+    console.log('Time preset value:', timePresetValue);
+    console.log('Working mode value:', workingModeValue);
+    
     if (startParam) {
         startTime = new Date(startParam);
+        console.log('Parsed start time:', startTime);
+        console.log('Start time is valid?:', !isNaN(startTime.getTime()));
     }
     
     if (endParam) {
         endTime = new Date(endParam);
+        console.log('Parsed end time:', endTime);
+        console.log('End time is valid?:', !isNaN(endTime.getTime()));
     }
+    
+    console.log('=== END URL PARSING DEBUG ===');
     
     // If no valid parameters, redirect back to home
     if (selectedUnits.length === 0 || !startTime || !endTime) {
@@ -360,6 +384,28 @@ function updateSelectedUnitsDisplay() {
 function updateTimeDisplay() {
     let timeRangeText = `${formatDateForDisplay(startTime)} - ${formatDateForDisplay(endTime)}`;
     
+    // Check if this is historical data
+    const now = new Date();
+    const timeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+    const isHistorical = timeDifference > fiveMinutesInMs;
+    
+    // Enhanced debug logging for historical data detection
+    console.log('=== STANDARD VIEW HISTORICAL DATA DETECTION DEBUG ===');
+    console.log('Current time (now):', now);
+    console.log('Current time ISO:', now.toISOString());
+    console.log('End time from URL:', endTime);
+    console.log('End time ISO:', endTime ? endTime.toISOString() : 'null');
+    console.log('Start time from URL:', startTime);
+    console.log('Start time ISO:', startTime ? startTime.toISOString() : 'null');
+    console.log('Time difference (ms):', timeDifference);
+    console.log('Time difference (minutes):', Math.round(timeDifference / (1000 * 60)));
+    console.log('Five minutes threshold (ms):', fiveMinutesInMs);
+    console.log('Is Historical?:', isHistorical);
+    console.log('timeRangeDisplay element exists?:', !!timeRangeDisplay);
+    console.log('URL search params:', window.location.search);
+    console.log('=========================================================');
+    
     // Add preset name if available
     if (timePresetValue && workingModeValue) {
         const shifts = workingModes[workingModeValue].shifts;
@@ -393,7 +439,53 @@ function updateTimeDisplay() {
         }
     }
     
-    timeRangeDisplay.textContent = timeRangeText;
+    // Update the real-time indicator based on historical data
+    const realTimeIndicator = document.getElementById('real-time-indicator');
+    if (realTimeIndicator) {
+        if (isHistorical) {
+            // Historical data - show historical indicator
+            realTimeIndicator.className = 'flex items-center px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm font-medium';
+            realTimeIndicator.innerHTML = `
+                <span class="h-2 w-2 mr-2 rounded-full bg-gray-500"></span>
+                Geçmiş
+            `;
+            console.log('STANDARD VIEW: Updated real-time indicator to HISTORICAL');
+        } else {
+            // Live data - show live indicator
+            realTimeIndicator.className = 'flex items-center px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium';
+            realTimeIndicator.innerHTML = `
+                <span class="h-2 w-2 mr-2 rounded-full bg-green-500 animate-pulse"></span>
+                Canlı
+            `;
+            console.log('STANDARD VIEW: Updated real-time indicator to LIVE');
+        }
+    }
+    
+    // Add historical indicator
+    if (isHistorical) {
+        timeRangeText = `📊 Geçmiş Veri: ${timeRangeText}`;
+        console.log('STANDARD VIEW: Setting HISTORICAL indicator:', timeRangeText);
+        // Change the display style to indicate historical data
+        if (timeRangeDisplay) {
+            timeRangeDisplay.style.color = '#6B7280'; // Gray color for historical
+            timeRangeDisplay.style.fontStyle = 'italic';
+        }
+    } else {
+        timeRangeText = `🟢 Canlı Veri: ${timeRangeText}`;
+        console.log('STANDARD VIEW: Setting LIVE indicator:', timeRangeText);
+        // Reset style for live data
+        if (timeRangeDisplay) {
+            timeRangeDisplay.style.color = '#1F2937'; // Normal dark color
+            timeRangeDisplay.style.fontStyle = 'normal';
+        }
+    }
+    
+    if (timeRangeDisplay) {
+        timeRangeDisplay.textContent = timeRangeText;
+        console.log('STANDARD VIEW: Updated timeRangeDisplay.textContent to:', timeRangeDisplay.textContent);
+    } else {
+        console.error('STANDARD VIEW: timeRangeDisplay element is null!');
+    }
 }
 
 // Load data for all units
@@ -414,7 +506,7 @@ function loadData() {
     // Initialize unit data storage for each unit
     selectedUnits.forEach(unit => {
         // Initialize empty data array for each unit
-        unitData[unit] = [];
+        unitData[unit] = {};
     });
     
     // Create a separate array to ensure we track units that had data
@@ -435,14 +527,23 @@ function loadData() {
     function checkAllRequestsCompleted() {
         completedRequests++;
         
+        console.log(`🔄 CALLBACK DEBUG: Completed requests: ${completedRequests}/${selectedUnits.length}`);
+        console.log(`🔄 CALLBACK DEBUG: Selected units:`, selectedUnits);
+        console.log(`🔄 CALLBACK DEBUG: Current unitData:`, Object.keys(unitData));
+        
         // When all initial requests are done, create UI and hide loading
         if (completedRequests === selectedUnits.length) {
+            console.log(`✅ CALLBACK DEBUG: All requests completed, creating UI...`);
+            
             // Count units that actually have data
             for (const u in unitData) {
-                if (unitData[u] && unitData[u].length > 0) {
+                if (unitData[u] && unitData[u].models && unitData[u].models.length > 0) {
                     unitsWithData.push(u);
                 }
             }
+            
+            console.log(`📊 CALLBACK DEBUG: Units with data:`, unitsWithData);
+            console.log(`📊 CALLBACK DEBUG: About to call updateUI()`);
             
             // Update UI with all the data collected so far
             updateUI();
@@ -451,15 +552,22 @@ function loadData() {
             loadingIndicator.classList.add('hidden');
             summaryContainer.classList.remove('hidden');
             
+            console.log(`✅ CALLBACK DEBUG: UI update completed, loading hidden, summary shown`);
+            
             // Update the last update time
             updateLastUpdateTime();
+        } else {
+            console.log(`⏳ CALLBACK DEBUG: Still waiting for ${selectedUnits.length - completedRequests} more requests`);
         }
     }
     
     // Connect to WebSocket for each unit
     selectedUnits.forEach(unit => {
+        console.log(`🚀 WEBSOCKET DEBUG: Connecting to unit: ${unit}`);
         // Connect to WebSocket for this unit
         connectWebSocket(unit, startTime, endTime, (data) => {
+            console.log(`📥 WEBSOCKET CALLBACK DEBUG: Received callback for unit: ${unit}`);
+            console.log(`📥 WEBSOCKET CALLBACK DEBUG: Data length:`, Array.isArray(data) ? data.length : 'Not array');
             // Check if all requests are completed
             checkAllRequestsCompleted();
         });
@@ -470,38 +578,66 @@ function loadData() {
 function processUnitData(unit, data) {
     // Ensure unit data array exists
     if (!unitData[unit]) {
-        unitData[unit] = [];
+        unitData[unit] = {};
     } else {
         // Clear existing data for this unit to prevent duplicates
-        unitData[unit] = [];
+        unitData[unit] = {};
     }
     
-    // Process each data item
+    // Check if data has the new structure with models and summary
+    if (data.models && data.summary) {
+        // New structure: extract models and store summary separately
+        unitData[unit].models = [];
+        data.models.forEach(item => {
+            // Always ensure item has unit property
+            item.unit = unit;
+            unitData[unit].models.push(item);
+        });
+        
+        // Store backend-calculated summary
+        unitData[unit].summary = data.summary;
+    } else {
+        // Old structure: assume data is array of models (fallback)
+        unitData[unit].models = [];
     data.forEach(item => {
         // Always ensure item has unit property
         item.unit = unit;
-        unitData[unit].push(item);
+            unitData[unit].models.push(item);
     });
+        
+        // No summary provided - will need to calculate (shouldn't happen with new backend)
+        unitData[unit].summary = null;
+    }
 }
 
 // Update UI with current data
 function updateUI() {
+    console.log(`🎨 UI DEBUG: updateUI() called`);
+    console.log(`🎨 UI DEBUG: isShiftChangeInProgress:`, isShiftChangeInProgress);
+    console.log(`🎨 UI DEBUG: unitsContainer.children.length:`, unitsContainer ? unitsContainer.children.length : 'unitsContainer is null');
+    console.log(`🎨 UI DEBUG: unitData keys:`, Object.keys(unitData));
+    
     // Skip UI updates during shift change to prevent old data from showing
     if (isShiftChangeInProgress) {
         console.log('[SHIFT CHANGE] Skipping UI update during shift change');
         return;
     }
     
-    // Update summary first
-    updateSummary(Object.values(unitData).flat());
+    // Update summary first (now uses backend-calculated values)
+    console.log(`🎨 UI DEBUG: Calling updateSummary()`);
+    updateSummary();
     
     // Check if tables exist - if not, create them
     if (unitsContainer.children.length === 0) {
+        console.log(`🎨 UI DEBUG: No existing tables, calling createUnitTables()`);
         createUnitTables(unitData);
     } else {
+        console.log(`🎨 UI DEBUG: Tables exist, updating existing tables`);
         // Otherwise update existing tables
         for (const unit in unitData) {
-            const models = unitData[unit];
+            const models = unitData[unit].models;
+            
+            if (!models) continue; // Skip if no models data
             
             // Update unit success count
             const successCountElement = document.getElementById(`success-count-${unit.replace(/\s+/g, '-')}`);
@@ -541,17 +677,17 @@ function updateUI() {
                 if (qualityElement) {
                     const totalProcessed = model.success_qty + model.fail_qty;
                     const modelQuality = totalProcessed > 0 ? model.success_qty / totalProcessed : 0;
-                    const quality = (modelQuality * 100).toFixed(2);
+                    const quality = (modelQuality * 100).toFixed(0);
                     if (qualityElement.textContent != quality) {
                         qualityElement.textContent = quality;
                     }
                 }
                 
-                // Update Performance
+                // Update Performance (use backend-calculated value)
                 const performanceElement = document.getElementById(`performance-${unit.replace(/\s+/g, '-')}-${model.model.replace(/\s+/g, '-')}`);
                 if (performanceElement) {
                     const performance = (model.performance !== undefined && model.performance !== null) 
-                        ? (model.performance * 100).toFixed(2) 
+                        ? (model.performance * 100).toFixed(1) 
                         : '-';
                     if (performanceElement.textContent != performance) {
                         performanceElement.textContent = performance;
@@ -560,10 +696,16 @@ function updateUI() {
             });
         }
     }
+    console.log(`🎨 UI DEBUG: updateUI() completed`);
 }
 
 // Create tables for each unit
 function createUnitTables(unitDataMap) {
+    console.log(`🏗️ TABLE DEBUG: createUnitTables() called`);
+    console.log(`🏗️ TABLE DEBUG: unitDataMap keys:`, Object.keys(unitDataMap));
+    console.log(`🏗️ TABLE DEBUG: isShiftChangeInProgress:`, isShiftChangeInProgress);
+    console.log(`🏗️ TABLE DEBUG: unitsContainer exists?:`, !!unitsContainer);
+    
     // Skip table creation during shift change to prevent old data from showing
     if (isShiftChangeInProgress) {
         console.log('[SHIFT CHANGE] Skipping table creation during shift change');
@@ -575,13 +717,18 @@ function createUnitTables(unitDataMap) {
     let unitCount = 0;
     
     for (const unit in unitDataMap) {
-        const models = unitDataMap[unit];
+        const models = unitDataMap[unit].models;
+        
+        console.log(`🏗️ TABLE DEBUG: Processing unit: ${unit}`);
+        console.log(`🏗️ TABLE DEBUG: Models for ${unit}:`, models ? models.length : 'No models');
         
         if (!models || models.length === 0) {
+            console.log(`🏗️ TABLE DEBUG: Skipping ${unit} - no models`);
             continue;
         }
         
         unitCount++;
+        console.log(`🏗️ TABLE DEBUG: Creating table for unit: ${unit} (count: ${unitCount})`);
         
         const unitContainer = document.createElement('div');
         unitContainer.className = 'bg-white rounded-lg shadow p-6 mb-8'; // Added margin-bottom
@@ -638,6 +785,8 @@ function createUnitTables(unitDataMap) {
         const tbody = document.createElement('tbody');
         tbody.className = 'bg-white divide-y divide-gray-200';
         
+        console.log(`🏗️ TABLE DEBUG: Creating ${models.length} rows for ${unit}`);
+        
         // Add a row for each model
         models.forEach((model, index) => {
                 const row = document.createElement('tr');
@@ -680,7 +829,7 @@ function createUnitTables(unitDataMap) {
             qualityCell.id = `quality-${unit.replace(/\s+/g, '-')}-${model.model.replace(/\s+/g, '-')}`;
             const totalProcessed = model.success_qty + model.fail_qty;
             const modelQuality = totalProcessed > 0 ? model.success_qty / totalProcessed : 0;
-            const quality = (modelQuality * 100).toFixed(2);
+            const quality = (modelQuality * 100).toFixed(0);
             qualityCell.textContent = quality;
                 row.appendChild(qualityCell);
                 
@@ -689,7 +838,7 @@ function createUnitTables(unitDataMap) {
             performanceCell.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-500';
             performanceCell.id = `performance-${unit.replace(/\s+/g, '-')}-${model.model.replace(/\s+/g, '-')}`;
             const performance = (model.performance !== undefined && model.performance !== null) 
-                ? (model.performance * 100).toFixed(2) 
+                ? (model.performance * 100).toFixed(1) 
                 : '-';
             performanceCell.textContent = performance;
                 row.appendChild(performanceCell);
@@ -702,15 +851,22 @@ function createUnitTables(unitDataMap) {
         
         // Add the completed unit table to the container
         unitsContainer.appendChild(unitContainer);
+        
+        console.log(`🏗️ TABLE DEBUG: Added table for ${unit} to DOM`);
     }
+    
+    console.log(`🏗️ TABLE DEBUG: Total units created: ${unitCount}`);
     
     // If no units were displayed, show an error message
     if (unitCount === 0) {
+        console.log(`🏗️ TABLE DEBUG: No units created, showing error message`);
         const noDataMessage = document.createElement('div');
         noDataMessage.className = 'bg-yellow-100 p-4 rounded-lg border border-yellow-300 text-yellow-800';
         noDataMessage.textContent = 'Bu zaman aralığında seçilen birimler için veri bulunamadı.';
         unitsContainer.appendChild(noDataMessage);
     }
+    
+    console.log(`🏗️ TABLE DEBUG: createUnitTables() completed`);
 }
 
 // Connect to WebSocket and handle data
@@ -749,19 +905,39 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
         
+        // Check if this is historical data - if so, don't send periodic updates
+        const now = new Date();
+        const timeDifference = now.getTime() - endTime.getTime();
+        const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+        const isHistorical = timeDifference > fiveMinutesInMs;
+        
+        if (isHistorical && hasReceivedInitialData) {
+            console.log(`[HISTORICAL DATA] Skipping periodic update for historical data for "${unitName}"`);
+            return;
+        }
+        
         if (unitSocket.readyState === WebSocket.OPEN) {
-            // Show the updating indicator
-            showUpdatingIndicator();
+            // Only show the updating indicator for live data
+            if (!isHistorical) {
+                showUpdatingIndicator();
+            }
             
-            // Use the current global start time and end time (which get updated when shifts change)
-            const currentEndTime = new Date();
+            // For historical data, use the original end time
+            // For live data, use current time
+            const requestEndTime = isHistorical ? endTime : new Date();
             
             // Send parameters to request new data
             const params = {
-                start_time: startTime.toISOString(), // This will use the updated startTime if shift changed
-                end_time: currentEndTime.toISOString(), // Update to current time
+                start_time: startTime.toISOString(),
+                end_time: requestEndTime.toISOString(),
                 working_mode: workingModeValue || 'mode1' // Include working mode for break calculations
             };
+            
+            console.log(`[DATA REQUEST] ${unitName}: ${isHistorical ? 'Historical' : 'Live'} data request`, {
+                start: params.start_time,
+                end: params.end_time,
+                isHistorical: isHistorical
+            });
             
             unitSocket.send(JSON.stringify(params));
         } else {
@@ -789,7 +965,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             
             // Ensure we have an entry in unitData even if no data is received
             if (!unitData[unitName]) {
-                unitData[unitName] = [];
+                unitData[unitName] = {};
             }
             
             callback([]);
@@ -807,6 +983,10 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     };
     
     unitSocket.onmessage = (event) => {
+        console.log(`🚀 FRONTEND: WebSocket message received for "${unitName}"`);
+        console.log(`🚀 FRONTEND: Event data exists?`, !!event.data);
+        console.log(`🚀 FRONTEND: Event data length:`, event.data ? event.data.length : 'undefined');
+        
         try {
             // Check if this connection is marked as invalid (from previous shift)
             if (unitSocket._isInvalid) {
@@ -820,7 +1000,24 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 return;
             }
             
+            console.log(`=== STANDARD VIEW DEBUG: DATA RECEIVED FOR ${unitName} ===`);
+            console.log('Raw event data length:', event.data.length);
+            console.log('Raw event data preview:', event.data.substring(0, 200));
+            
             const data = JSON.parse(event.data);
+            
+            console.log('Parsed data type:', typeof data);
+            console.log('Parsed data structure:');
+            console.log('  - has models property?:', data.hasOwnProperty('models'));
+            console.log('  - has summary property?:', data.hasOwnProperty('summary'));
+            console.log('  - is array?:', Array.isArray(data));
+            if (data.models) {
+                console.log('  - models length:', data.models.length);
+                console.log('  - first model:', data.models[0]);
+            }
+            if (data.summary) {
+                console.log('  - summary:', data.summary);
+            }
             
             // Check if response contains an error
             if (data.error) {
@@ -833,28 +1030,39 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                     
                     // Ensure we have an entry in unitData even if there's an error
                     if (!unitData[unitName]) {
-                        unitData[unitName] = [];
+                        unitData[unitName] = {};
                     }
                     
                 callback([]);
                 }
             } else {
+                console.log(`STANDARD VIEW: Processing data for "${unitName}"`);
+                
                 // Process the data - CRITICAL: Must process before calling callback
                 processUnitData(unitName, data);
+                
+                console.log(`STANDARD VIEW: After processing, unitData["${unitName}"] structure:`);
+                console.log('  - has models?:', unitData[unitName] && unitData[unitName].models);
+                console.log('  - models length:', unitData[unitName] && unitData[unitName].models ? unitData[unitName].models.length : 'No models');
+                console.log('  - has summary?:', unitData[unitName] && unitData[unitName].summary);
                 
                 // Only call the callback once for initial data
                 if (!hasReceivedInitialData) {
                     hasReceivedInitialData = true;
                     clearTimeout(connectionTimeout);
-                callback(data);
+                    console.log(`STANDARD VIEW: Calling initial callback for "${unitName}"`);
+                    callback(data.models || data);
                 } else {
                     // If it's a subsequent update, update UI directly
+                    console.log(`STANDARD VIEW: Updating UI for subsequent data for "${unitName}"`);
                     updateUI();
                     updateLastUpdateTime();
                 }
             }
+            console.log('=== END STANDARD VIEW DEBUG ===');
         } catch (error) {
-            console.error(`Error parsing data for "${unitName}":`, error);
+            console.error(`🚨 FRONTEND ERROR: Error parsing data for "${unitName}":`, error);
+            console.error(`🚨 FRONTEND ERROR: Stack trace:`, error.stack);
             
             if (!hasReceivedInitialData) {
                 hasReceivedInitialData = true;
@@ -862,7 +1070,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 
                 // Ensure we have an entry in unitData even if there's a parsing error
                 if (!unitData[unitName]) {
-                    unitData[unitName] = [];
+                    unitData[unitName] = {};
                 }
                 
             callback([]);
@@ -921,103 +1129,49 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
 }
 
 // Update summary with production data
-function updateSummary(data) {
-    // Group data by unit first, then by model within each unit
-    const unitGroups = {};
+function updateSummary() {
+    // Skip summary update during shift change to prevent old data from showing
+    if (isShiftChangeInProgress) {
+        console.log('[SHIFT CHANGE] Skipping summary update during shift change');
+        return;
+    }
     
-    data.forEach(item => {
-        if (!unitGroups[item.unit]) {
-            unitGroups[item.unit] = {};
-        }
-        
-        if (!unitGroups[item.unit][item.model]) {
-            unitGroups[item.unit][item.model] = {
-                model: item.model,
-                success_qty: 0,
-                fail_qty: 0,
-                total_qty: 0,
-                target: item.target,
-                unit: item.unit
-            };
-        }
-        
-        // Add quantities for this unit's model
-        unitGroups[item.unit][item.model].success_qty += item.success_qty;
-        unitGroups[item.unit][item.model].fail_qty += item.fail_qty;
-        unitGroups[item.unit][item.model].total_qty += item.total_qty;
-    });
-    
-    // Calculate totals across all units
+    // Use backend-calculated summary values if available
     let totalSuccessQty = 0;
     let totalFailQty = 0;
-    let totalQtyAll = 0;
-    let weightedQualitySum = 0;
+    let overallQuality = 0;
+    let overallPerformance = 0;
     
-    // Calculate performance for each unit, then average them
-    let unitPerformances = [];
-    let validUnitsForPerformance = 0;
+    let unitsWithSummary = 0;
+    let qualitySum = 0;
+    let performanceSum = 0;
     
-    for (const unitName in unitGroups) {
-        const unitModels = Object.values(unitGroups[unitName]);
-        
-        // Calculate unit totals
-        let unitSuccessQty = 0;
-        let unitFailQty = 0;
-        let unitTotalQty = 0;
-        
-        unitModels.forEach(model => {
-            unitSuccessQty += model.success_qty;
-            unitFailQty += model.fail_qty;
-            unitTotalQty += model.total_qty;
+    // Aggregate backend-calculated summaries from all units
+    for (const unit in unitData) {
+        if (unitData[unit] && unitData[unit].summary) {
+            const summary = unitData[unit].summary;
             
-            // Add to overall totals
-            totalSuccessQty += model.success_qty;
-            totalFailQty += model.fail_qty;
-            totalQtyAll += model.total_qty;
+            totalSuccessQty += summary.total_success || 0;
+            totalFailQty += summary.total_fail || 0;
             
-            // Calculate quality for this model and add to weighted sum
-            const totalProcessed = model.success_qty + model.fail_qty;
-            const modelQuality = totalProcessed > 0 ? model.success_qty / totalProcessed : 0;
-            weightedQualitySum += modelQuality * totalProcessed;
-        });
-        
-        // Calculate performance for this unit
-        const modelsWithTarget = unitModels.filter(model => model.target && model.target > 0);
-        
-        if (modelsWithTarget.length > 0) {
-            const currentTime = new Date();
-            const operationTime = (currentTime - startTime) / 1000; // Convert to seconds
+            // Weight quality and performance by unit's total production
+            const unitTotalProcessed = (summary.total_success || 0) + (summary.total_fail || 0);
+            if (unitTotalProcessed > 0) {
+                qualitySum += (summary.total_quality || 0) * unitTotalProcessed;
+            }
             
-            if (operationTime > 0) {
-                let unitTheoreticalTime = 0;
-                
-                modelsWithTarget.forEach(model => {
-                    // Calculate theoretical time for this model (same as hourly view)
-                    const idealCycleTime = 3600 / model.target; // seconds per unit
-                    const modelTheoreticalTime = model.total_qty * idealCycleTime;
-                    unitTheoreticalTime += modelTheoreticalTime;
-                });
-                
-                // Calculate this unit's performance using theoretical time method
-                if (unitTheoreticalTime > 0) {
-                    const unitPerformance = unitTheoreticalTime / operationTime;
-                    unitPerformances.push(unitPerformance);
-                    validUnitsForPerformance++;
-                }
+            // Include performance if valid
+            if (summary.total_performance !== null && summary.total_performance !== undefined) {
+                performanceSum += summary.total_performance;
+                unitsWithSummary++;
             }
         }
     }
     
     // Calculate overall metrics
     const totalProcessedAll = totalSuccessQty + totalFailQty;
-    const overallQuality = totalProcessedAll > 0 ? weightedQualitySum / totalProcessedAll : 0;
-    
-    // Calculate average performance across units
-    let overallPerformance = 0;
-    if (validUnitsForPerformance > 0) {
-        const sumPerformances = unitPerformances.reduce((sum, perf) => sum + perf, 0);
-        overallPerformance = sumPerformances / validUnitsForPerformance;
-    }
+    overallQuality = totalProcessedAll > 0 ? qualitySum / totalProcessedAll : 0;
+    overallPerformance = unitsWithSummary > 0 ? performanceSum / unitsWithSummary : 0;
     
     // Check if values have changed and update
     const oldTotalSuccess = totalSuccess.textContent;
@@ -1035,14 +1189,14 @@ function updateSummary(data) {
     }
     
     const oldTotalQuality = totalQuality.textContent;
-    const newTotalQuality = (overallQuality * 100).toFixed(2);
+    const newTotalQuality = (overallQuality * 100).toFixed(0);
     if (oldTotalQuality !== newTotalQuality) {
         totalQuality.textContent = newTotalQuality;
         elementsToFlashOnUpdate.push(totalQuality);
     }
     
     const oldTotalPerformance = totalPerformance.textContent;
-    const newTotalPerformance = (overallPerformance * 100).toFixed(2);
+    const newTotalPerformance = (overallPerformance * 100).toFixed(1);
     if (oldTotalPerformance !== newTotalPerformance) {
         totalPerformance.textContent = newTotalPerformance;
         elementsToFlashOnUpdate.push(totalPerformance);
@@ -1054,37 +1208,53 @@ function updateLastUpdateTime() {
     const now = new Date();
     lastUpdateTime = now;
     
+    // Check if this is historical data
+    const timeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+    const isHistorical = timeDifference > fiveMinutesInMs;
+    
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
-    lastUpdateTimeElement.textContent = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
+    
+    if (isHistorical) {
+        lastUpdateTimeElement.textContent = `Geçmiş veri: ${formatDateForDisplay(endTime)}`;
+    } else {
+        lastUpdateTimeElement.textContent = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
+    }
     
     // Hide updating indicator
     updateIndicator.classList.add('hidden');
     
-    // Apply flash effect to elements that changed
-    const elementsToFlash = [...elementsToFlashOnUpdate]; // Create a copy
-    elementsToFlashOnUpdate = []; // Clear the array for next update
-    
-    // Flash elements that need to show update
-    elementsToFlash.forEach(element => {
-        if (element && element.classList) {
-            // Add flash effect
-            element.classList.add('animate-flash');
-            // Remove flash effect after animation completes
+    // Only apply flash effects for live data, not historical data
+    if (!isHistorical) {
+        // Apply flash effect to elements that changed
+        const elementsToFlash = [...elementsToFlashOnUpdate]; // Create a copy
+        elementsToFlashOnUpdate = []; // Clear the array for next update
+        
+        // Flash elements that need to show update
+        elementsToFlash.forEach(element => {
+            if (element && element.classList) {
+                // Add flash effect
+                element.classList.add('animate-flash');
+                // Remove flash effect after animation completes
+                setTimeout(() => {
+                    element.classList.remove('animate-flash');
+                }, 1000);
+            }
+        });
+        
+        // Flash the real-time indicator to show successful update
+        const realTimeIndicator = document.getElementById('real-time-indicator');
+        if (realTimeIndicator) {
+            realTimeIndicator.classList.add('bg-green-200');
             setTimeout(() => {
-                element.classList.remove('animate-flash');
+                realTimeIndicator.classList.remove('bg-green-200');
+                realTimeIndicator.classList.add('bg-green-100');
             }, 1000);
         }
-    });
-    
-    // Flash the real-time indicator to show successful update
-    const realTimeIndicator = document.getElementById('real-time-indicator');
-    if (realTimeIndicator) {
-        realTimeIndicator.classList.add('bg-green-200');
-        setTimeout(() => {
-            realTimeIndicator.classList.remove('bg-green-200');
-            realTimeIndicator.classList.add('bg-green-100');
-        }, 1000);
+    } else {
+        // Clear the flash elements array for historical data
+        elementsToFlashOnUpdate = [];
     }
 } 

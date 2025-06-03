@@ -118,6 +118,28 @@ function updateSelectedUnitsDisplay() {
 function updateTimeDisplay() {
     let timeRangeText = `${formatDateForDisplay(startTime)} - ${formatDateForDisplay(endTime)}`;
     
+    // Check if this is historical data
+    const now = new Date();
+    const timeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+    const isHistorical = timeDifference > fiveMinutesInMs;
+    
+    // Enhanced debug logging for historical data detection
+    console.log('=== REPORT VIEW HISTORICAL DATA DETECTION DEBUG ===');
+    console.log('Current time (now):', now);
+    console.log('Current time ISO:', now.toISOString());
+    console.log('End time from URL:', endTime);
+    console.log('End time ISO:', endTime ? endTime.toISOString() : 'null');
+    console.log('Start time from URL:', startTime);
+    console.log('Start time ISO:', startTime ? startTime.toISOString() : 'null');
+    console.log('Time difference (ms):', timeDifference);
+    console.log('Time difference (minutes):', Math.round(timeDifference / (1000 * 60)));
+    console.log('Five minutes threshold (ms):', fiveMinutesInMs);
+    console.log('Is Historical?:', isHistorical);
+    console.log('timeRangeDisplay element exists?:', !!timeRangeDisplay);
+    console.log('URL search params:', window.location.search);
+    console.log('=======================================================');
+
     if (timePresetValue && workingModeValue) {
         const shifts = workingModes[workingModeValue].shifts;
         const shiftConfig = shifts.find(s => s.id === timePresetValue);
@@ -129,7 +151,53 @@ function updateTimeDisplay() {
         }
     }
     
-    timeRangeDisplay.textContent = timeRangeText;
+    // Update the real-time indicator based on historical data
+    const realTimeIndicator = document.getElementById('real-time-indicator');
+    if (realTimeIndicator) {
+        if (isHistorical) {
+            // Historical data - show historical indicator
+            realTimeIndicator.className = 'flex items-center px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-sm font-medium';
+            realTimeIndicator.innerHTML = `
+                <span class="h-2 w-2 mr-2 rounded-full bg-gray-500"></span>
+                Geçmiş
+            `;
+            console.log('REPORT VIEW: Updated real-time indicator to HISTORICAL');
+        } else {
+            // Live data - show live indicator
+            realTimeIndicator.className = 'flex items-center px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm font-medium';
+            realTimeIndicator.innerHTML = `
+                <span class="h-2 w-2 mr-2 rounded-full bg-green-500 animate-pulse"></span>
+                Canlı
+            `;
+            console.log('REPORT VIEW: Updated real-time indicator to LIVE');
+        }
+    }
+    
+    // Add historical indicator
+    if (isHistorical) {
+        timeRangeText = `📊 Geçmiş Veri: ${timeRangeText}`;
+        console.log('REPORT VIEW: Setting HISTORICAL indicator:', timeRangeText);
+        // Change the display style to indicate historical data
+        if (timeRangeDisplay) {
+            timeRangeDisplay.style.color = '#6B7280'; // Gray color for historical
+            timeRangeDisplay.style.fontStyle = 'italic';
+        }
+    } else {
+        timeRangeText = `🟢 Canlı Veri: ${timeRangeText}`;
+        console.log('REPORT VIEW: Setting LIVE indicator:', timeRangeText);
+        // Reset style for live data
+        if (timeRangeDisplay) {
+            timeRangeDisplay.style.color = '#1F2937'; // Normal dark color
+            timeRangeDisplay.style.fontStyle = 'normal';
+        }
+    }
+    
+    if (timeRangeDisplay) {
+        timeRangeDisplay.textContent = timeRangeText;
+        console.log('REPORT VIEW: Updated timeRangeDisplay.textContent to:', timeRangeDisplay.textContent);
+    } else {
+        console.error('REPORT VIEW: timeRangeDisplay element is null!');
+    }
 }
 
 // Format date for display
@@ -148,26 +216,43 @@ function formatDateForDisplay(date) {
 // Update last update time
 function updateLastUpdateTime() {
     const now = new Date();
+    
+    // Check if this is historical data
+    const timeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+    const isHistorical = timeDifference > fiveMinutesInMs;
+    
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
     const seconds = String(now.getSeconds()).padStart(2, '0');
-    lastUpdateTimeElement.textContent = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
     
-    // Apply flash effect to elements that changed
-    const elementsToFlash = [...elementsToFlashOnUpdate]; // Create a copy
-    elementsToFlashOnUpdate = []; // Clear the array for next update
+    if (isHistorical) {
+        lastUpdateTimeElement.textContent = `Geçmiş veri: ${formatDateForDisplay(endTime)}`;
+    } else {
+        lastUpdateTimeElement.textContent = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
+    }
     
-    // Flash elements that need to show update
-    elementsToFlash.forEach(element => {
-        if (element && element.classList) {
-            // Add flash effect
-            element.classList.add('animate-flash');
-            // Remove flash effect after animation completes
-            setTimeout(() => {
-                element.classList.remove('animate-flash');
-            }, 1000);
-        }
-    });
+    // Only apply flash effects for live data, not historical data
+    if (!isHistorical) {
+        // Apply flash effect to elements that changed
+        const elementsToFlash = [...elementsToFlashOnUpdate]; // Create a copy
+        elementsToFlashOnUpdate = []; // Clear the array for next update
+        
+        // Flash elements that need to show update
+        elementsToFlash.forEach(element => {
+            if (element && element.classList) {
+                // Add flash effect
+                element.classList.add('animate-flash');
+                // Remove flash effect after animation completes
+                setTimeout(() => {
+                    element.classList.remove('animate-flash');
+                }, 1000);
+            }
+        });
+    } else {
+        // Clear the flash elements array for historical data
+        elementsToFlashOnUpdate = [];
+    }
 }
 
 // Load data for all units
@@ -178,7 +263,7 @@ function loadData() {
     
     // Initialize unit data
     selectedUnits.forEach(unit => {
-        unitData[unit] = [];
+        unitData[unit] = { models: [], summary: null };
     });
     
     let completedRequests = 0;
@@ -215,7 +300,20 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     
     function sendDataRequest() {
         if (unitSocket.readyState === WebSocket.OPEN) {
-            const currentEndTime = new Date();
+            // Check if this is historical data
+            const now = new Date();
+            const timeDifference = now.getTime() - endTime.getTime();
+            const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+            const isHistorical = timeDifference > fiveMinutesInMs;
+            
+            // For historical data, don't send periodic updates after initial load
+            if (isHistorical && hasReceivedInitialData) {
+                console.log(`[HISTORICAL DATA] Skipping periodic update for historical data for "${unitName}"`);
+                return;
+            }
+            
+            // For historical data, use the original end time; for live data, use current time
+            const currentEndTime = isHistorical ? endTime : new Date();
             const params = {
                 start_time: startTime.toISOString(),
                 end_time: currentEndTime.toISOString(),
@@ -229,7 +327,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     const connectionTimeout = setTimeout(() => {
         if (!hasReceivedInitialData) {
             hasReceivedInitialData = true;
-            unitData[unitName] = [];
+            unitData[unitName] = { models: [], summary: null };
             callback([]);
         }
     }, 10000);
@@ -248,20 +346,35 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 if (!hasReceivedInitialData) {
                     hasReceivedInitialData = true;
                     clearTimeout(connectionTimeout);
-                    unitData[unitName] = [];
+                    unitData[unitName] = { models: [], summary: null };
                     callback([]);
                 }
             } else {
-                // Process the data
-                unitData[unitName] = data.map(item => ({
-                    ...item,
-                    unit: unitName
-                }));
+                // Check if data has the new structure with models and summary
+                if (data.models && data.summary) {
+                    // New structure: store both models and summary
+                    unitData[unitName] = {
+                        models: data.models.map(item => ({
+                            ...item,
+                            unit: unitName
+                        })),
+                        summary: data.summary
+                    };
+                } else {
+                    // Old structure: assume data is array of models (fallback)
+                    unitData[unitName] = {
+                        models: data.map(item => ({
+                            ...item,
+                            unit: unitName
+                        })),
+                        summary: null
+                    };
+                }
                 
                 if (!hasReceivedInitialData) {
                     hasReceivedInitialData = true;
                     clearTimeout(connectionTimeout);
-                    callback(data);
+                    callback(data.models || data);
                 } else {
                     // Show update indicator
                     updateIndicator.classList.remove('hidden');
@@ -281,7 +394,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             if (!hasReceivedInitialData) {
                 hasReceivedInitialData = true;
                 clearTimeout(connectionTimeout);
-                unitData[unitName] = [];
+                unitData[unitName] = { models: [], summary: null };
                 callback([]);
             }
         }
@@ -296,7 +409,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         if (!hasReceivedInitialData) {
             hasReceivedInitialData = true;
             clearTimeout(connectionTimeout);
-            unitData[unitName] = [];
+            unitData[unitName] = { models: [], summary: null };
             callback([]);
         }
     };
@@ -309,7 +422,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         if (!hasReceivedInitialData) {
             hasReceivedInitialData = true;
             clearTimeout(connectionTimeout);
-            unitData[unitName] = [];
+            unitData[unitName] = { models: [], summary: null };
             callback([]);
         }
     };
@@ -317,7 +430,30 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
 
 // Calculate unit metrics
 function calculateUnitMetrics(unitName) {
-    const data = unitData[unitName] || [];
+    const unitDataObj = unitData[unitName];
+    
+    if (!unitDataObj) {
+        return {
+            totalSuccess: 0,
+            totalFail: 0,
+            quality: 0,
+            performance: 0
+        };
+    }
+    
+    // Check if we have backend-calculated summary
+    if (unitDataObj.summary) {
+        // Use backend-calculated values
+        return {
+            totalSuccess: unitDataObj.summary.total_success || 0,
+            totalFail: unitDataObj.summary.total_fail || 0,
+            quality: (unitDataObj.summary.total_quality || 0) * 100,
+            performance: (unitDataObj.summary.total_performance || 0) * 100
+        };
+    }
+    
+    // Fallback: calculate from model data if no summary (shouldn't happen with new backend)
+    const data = unitDataObj.models || unitDataObj || [];
     
     if (data.length === 0) {
         return {
@@ -345,24 +481,13 @@ function calculateUnitMetrics(unitName) {
     
     const quality = (totalSuccess + totalFail) > 0 ? weightedQualitySum / (totalSuccess + totalFail) : 0;
     
-    // Calculate performance using theoretical time method (same as other views)
-    const modelsWithTarget = data.filter(model => model.target && model.target > 0);
+    // Get performance from backend-calculated model values (all should be same)
+    const modelsWithTarget = data.filter(model => model.target && model.target > 0 && model.performance !== null && model.performance !== undefined);
     let performance = 0;
     
     if (modelsWithTarget.length > 0) {
-        const currentTime = new Date();
-        const operationTime = (currentTime - startTime) / 1000; // seconds
-        
-        if (operationTime > 0) {
-            let totalTheoreticalTime = 0;
-            
-            modelsWithTarget.forEach(model => {
-                const idealCycleTime = 3600 / model.target;
-                totalTheoreticalTime += model.total_qty * idealCycleTime;
-            });
-            
-            performance = totalTheoreticalTime / operationTime;
-        }
+        // Use backend-calculated performance (all models should have same value)
+        performance = modelsWithTarget[0].performance;
     }
     
     return {
@@ -576,7 +701,7 @@ function updateSummaryStatistics(unitMetrics) {
     
     const avgQualityElement = document.getElementById('avg-quality');
     const oldAvgQuality = avgQualityElement.textContent;
-    const newAvgQuality = avgQuality.toFixed(1) + '%';
+    const newAvgQuality = avgQuality.toFixed(0);
     if (oldAvgQuality !== newAvgQuality) {
         avgQualityElement.textContent = newAvgQuality;
         elementsToFlashOnUpdate.push(avgQualityElement);
@@ -584,7 +709,7 @@ function updateSummaryStatistics(unitMetrics) {
     
     const avgPerformanceElement = document.getElementById('avg-performance');
     const oldAvgPerformance = avgPerformanceElement.textContent;
-    const newAvgPerformance = avgPerformance.toFixed(1) + '%';
+    const newAvgPerformance = avgPerformance.toFixed(1);
     if (oldAvgPerformance !== newAvgPerformance) {
         avgPerformanceElement.textContent = newAvgPerformance;
         elementsToFlashOnUpdate.push(avgPerformanceElement);

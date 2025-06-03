@@ -2,6 +2,8 @@
 const currentTimeDisplay = document.getElementById('current-time');
 const loadingIndicator = document.getElementById('loading-indicator');
 const hourlyDataContainer = document.getElementById('hourly-data-container');
+const selectedUnitsDisplay = document.getElementById('selected-units-display');
+const timeRangeDisplay = document.getElementById('time-range-display');
 
 // Parse URL parameters
 let selectedUnits = [];
@@ -48,7 +50,17 @@ const workingModes = {
 function checkForNewTimePeriod() {
     if (!timePresetValue || !startTime || !endTime || !workingModeValue) return false;
 
+    // Check if user is viewing historical data
+    // If the end time is more than 5 minutes in the past, consider it historical
     const now = new Date();
+    const timeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+    
+    if (timeDifference > fiveMinutesInMs) {
+        console.log('[HISTORICAL DATA] User is viewing historical data, skipping automatic shift change');
+        return false;
+    }
+
     const currentHour = now.getHours();
     
     // Simple, direct shift boundary detection for Mode 1
@@ -158,11 +170,6 @@ function updateTimePeriod() {
     console.log(`  startTime: ${startTime.toISOString()}`);
     console.log(`  endTime: ${endTime.toISOString()}`);
     
-    // Update time display
-    if (typeof updateTimeDisplay === 'function') {
-        updateTimeDisplay();
-    }
-    
     // Close existing WebSocket connections and mark them as invalid
     console.log('[SHIFT CHANGE] Closing existing WebSocket connections...');
     for (const unitName in unitSockets) {
@@ -218,13 +225,30 @@ document.addEventListener('DOMContentLoaded', () => {
     timePresetValue = params.get('preset') || '';
     workingModeValue = params.get('workingMode') || 'mode1'; // Default to mode1 if not specified
     
+    console.log('=== HOURLY VIEW URL PARAMETER DEBUG ===');
+    console.log('Full URL:', window.location.href);
+    console.log('Search params:', window.location.search);
+    console.log('Start param (raw):', startParam);
+    console.log('End param (raw):', endParam);
+    console.log('Selected units:', selectedUnits);
+    console.log('Time preset value:', timePresetValue);
+    console.log('Working mode value:', workingModeValue);
+    
     if (startParam) {
         startTime = new Date(startParam);
+        console.log('Parsed start time:', startTime);
+        console.log('Start time ISO:', startTime.toISOString());
+        console.log('Start time is valid?:', !isNaN(startTime.getTime()));
     }
     
     if (endParam) {
         endTime = new Date(endParam);
+        console.log('Parsed end time:', endTime);
+        console.log('End time ISO:', endTime.toISOString());
+        console.log('End time is valid?:', !isNaN(endTime.getTime()));
     }
+    
+    console.log('=== END HOURLY URL PARSING DEBUG ===');
     
     // If no valid parameters, redirect back to home
     if (selectedUnits.length === 0 || !startTime || !endTime) {
@@ -275,37 +299,85 @@ function createLastUpdateDisplay() {
 // Update the last update time display
 function updateLastUpdateTime() {
     if (lastUpdateDisplay) {
+        // Check if this is historical data
         const now = new Date();
+        const timeDifference = now.getTime() - endTime.getTime();
+        const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+        const isHistorical = timeDifference > fiveMinutesInMs;
+        
         const hours = String(now.getHours()).padStart(2, '0');
         const minutes = String(now.getMinutes()).padStart(2, '0');
         const seconds = String(now.getSeconds()).padStart(2, '0');
-        lastUpdateDisplay.innerHTML = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
         
-        // Flash effect to indicate update
-        lastUpdateDisplay.classList.add('bg-green-600');
-        setTimeout(() => {
-            lastUpdateDisplay.classList.remove('bg-green-600');
-            lastUpdateDisplay.classList.add('bg-gray-800');
-        }, 1000);
+        let displayText;
+        if (isHistorical) {
+            // For historical data, show the end time range instead of current update time
+            const endHours = String(endTime.getHours()).padStart(2, '0');
+            const endMinutes = String(endTime.getMinutes()).padStart(2, '0');
+            displayText = `📊 Geçmiş Veri: ${endHours}:${endMinutes}`;
+            // Change style for historical data
+            lastUpdateDisplay.classList.remove('bg-gray-800', 'bg-green-600');
+            lastUpdateDisplay.classList.add('bg-gray-600');
+        } else {
+            displayText = `🟢 Canlı Veri: ${hours}:${minutes}:${seconds}`;
+            // Flash effect to indicate update for live data only
+            lastUpdateDisplay.classList.add('bg-green-600');
+            setTimeout(() => {
+                lastUpdateDisplay.classList.remove('bg-green-600');
+                lastUpdateDisplay.classList.add('bg-gray-800');
+            }, 1000);
+        }
+        
+        lastUpdateDisplay.innerHTML = displayText;
     }
 }
 
 // Show update in progress indicator
 function showUpdatingIndicator() {
     if (lastUpdateDisplay) {
-        lastUpdateDisplay.innerHTML = 'Güncelleniyor...';
-        lastUpdateDisplay.classList.remove('bg-gray-800');
-        lastUpdateDisplay.classList.add('bg-blue-600');
+        // Check if this is historical data - don't show updating indicator for historical data
+        const now = new Date();
+        const timeDifference = now.getTime() - endTime.getTime();
+        const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+        const isHistorical = timeDifference > fiveMinutesInMs;
+        
+        if (!isHistorical) {
+            lastUpdateDisplay.innerHTML = 'Güncelleniyor...';
+            lastUpdateDisplay.classList.remove('bg-gray-800');
+            lastUpdateDisplay.classList.add('bg-blue-600');
+        }
     }
 }
 
 // Update current time display
 function updateCurrentTime() {
+    // Check if this is historical data
     const now = new Date();
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
     
-    currentTimeDisplay.textContent = `${hours}:${minutes}`;
+    // Safety check: if endTime is not set yet, show current time
+    if (!endTime) {
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        currentTimeDisplay.textContent = `${hours}:${minutes}`;
+        currentTimeDisplay.style.fontSize = ''; // Reset to default size
+        return;
+    }
+    
+    const timeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+    const isHistorical = timeDifference > fiveMinutesInMs;
+    
+    if (isHistorical) {
+        // For historical data, show the title instead of current time
+        currentTimeDisplay.textContent = 'SAATLİK ÜRETİM DURUMU';
+        currentTimeDisplay.style.fontSize = '4rem'; // Smaller font for the title
+    } else {
+        // For live data, show current time
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        currentTimeDisplay.textContent = `${hours}:${minutes}`;
+        currentTimeDisplay.style.fontSize = ''; // Reset to default size
+    }
 }
 
 // Format date for display
@@ -461,7 +533,7 @@ function createOrUpdateHourlyDataDisplay(unitName, data) {
     col1.appendChild(col1Header);
     col1.appendChild(col1Value);
     
-    // Column 2: Performance instead of OEE
+    // Column 2: Theoretical Production instead of Performance
     const col2 = document.createElement('td');
     col2.className = 'p-0';
     col2.style.width = '50%';
@@ -469,19 +541,19 @@ function createOrUpdateHourlyDataDisplay(unitName, data) {
     const col2Header = document.createElement('div');
     col2Header.className = 'text-white text-7xl font-bold text-center p-2';
     col2Header.style.backgroundColor = '#7F1D1D'; // bg-red-900
-    col2Header.textContent = 'OEE (%)';
+    col2Header.textContent = 'HEDEF';
     
     const col2Value = document.createElement('div');
-    col2Value.id = `performance-value-${unitName.replace(/\s+/g, '-')}`;
+    col2Value.id = `theoretical-value-${unitName.replace(/\s+/g, '-')}`;
     col2Value.className = 'text-9xl font-bold text-center p-2';
     col2Value.style.backgroundColor = '#BBF7D0'; // bg-green-200
     
-    // Update Performance value from data summary (not from hourly data)
-    let performanceValue = '-';
-    if (data.total_performance !== null && data.total_performance !== undefined && data.total_performance > 0) {
-        performanceValue = `${(data.total_performance * 100).toFixed(2)}`;
+    // Calculate Theoretical Production Quantity from data summary
+    let theoreticalValue = '-';
+    if (data.total_theoretical_qty !== null && data.total_theoretical_qty !== undefined && data.total_theoretical_qty > 0) {
+        theoreticalValue = `${Math.round(data.total_theoretical_qty)}`;
     }
-    col2Value.textContent = performanceValue;
+    col2Value.textContent = theoreticalValue;
     
     col2.appendChild(col2Header);
     col2.appendChild(col2Value);
@@ -518,13 +590,13 @@ function createOrUpdateHourlyDataDisplay(unitName, data) {
     const headerRow = document.createElement('tr');
     
     const headers = [
-        'Saat', 'Üretim', 'Tamir', 'OEE (%)'
+        'Saat', 'Üretim', 'Tamir', 'HEDEF'
     ];
     
     headers.forEach(headerText => {
         const th = document.createElement('th');
         th.scope = 'col';
-        th.className = 'px-2 py-2 text-center font-bold text-black text-4xl tracking-wider';
+        th.className = 'px-2 py-2 text-center font-bold text-black text-5xl tracking-wider';
         th.textContent = headerText;
         headerRow.appendChild(th);
     });
@@ -551,7 +623,7 @@ function createOrUpdateHourlyDataDisplay(unitName, data) {
     unitContainers[unitName] = {
         section: unitSection,
         productionValue: col1Value,
-        performanceValue: col2Value,
+        theoreticalValue: col2Value,
         tableBody: tableBody,
         lastData: JSON.parse(JSON.stringify(data)) // Store initial data for comparison
     };
@@ -583,24 +655,24 @@ function updateHourlyDataDisplay(unitName, data) {
     const totalSuccessQty = data.total_success || 0;
     container.productionValue.textContent = totalSuccessQty.toLocaleString();
     
-    // Update Performance value from data summary (not from hourly data)
-    let performanceValue = '-';
-    if (data.total_performance !== null && data.total_performance !== undefined && data.total_performance > 0) {
-        performanceValue = `${(data.total_performance * 100).toFixed(2)}`;
+    // Update Theoretical Production Quantity from data summary (not from hourly data)
+    let theoreticalValue = '-';
+    if (data.total_theoretical_qty !== null && data.total_theoretical_qty !== undefined && data.total_theoretical_qty > 0) {
+        theoreticalValue = `${Math.round(data.total_theoretical_qty)}`;
     }
-    container.performanceValue.textContent = performanceValue;
+    container.theoreticalValue.textContent = theoreticalValue;
     
     // Update table body with the latest hourly data
     updateTableBody(container.tableBody, data.hourly_data);
     
     // Add a flash effect to the updated values
     container.productionValue.classList.add('flash-update');
-    container.performanceValue.classList.add('flash-update');
+    container.theoreticalValue.classList.add('flash-update');
     
     // Remove flash effect after animation
     setTimeout(() => {
         container.productionValue.classList.remove('flash-update');
-        container.performanceValue.classList.remove('flash-update');
+        container.theoreticalValue.classList.remove('flash-update');
     }, 500);
     
     console.log(`Updated display for "${unitName}" complete`);
@@ -738,7 +810,7 @@ function updateTableBody(tableBody, hourlyData) {
         // Success quantity (Production)
         const successQty = hour.success_qty || 0;
         const successCell = document.createElement('td');
-        successCell.className = 'px-2 py-2 text-center text-black font-bold text-4xl';
+        successCell.className = 'px-2 py-2 text-center text-black font-bold text-7xl';
         successCell.id = `success-${hour._startDate.getHours()}`;
         successCell.textContent = successQty.toLocaleString();
         row.appendChild(successCell);
@@ -746,22 +818,22 @@ function updateTableBody(tableBody, hourlyData) {
         // Fail quantity (Repair)
         const failQty = hour.fail_qty || 0;
         const failCell = document.createElement('td');
-        failCell.className = 'px-2 py-2 text-center text-red-900 font-bold text-4xl ';
+        failCell.className = 'px-2 py-2 text-center text-red-900 font-bold text-7xl ';
         failCell.id = `fail-${hour._startDate.getHours()}`;
         failCell.textContent = failQty.toLocaleString();
         row.appendChild(failCell);
         
-        // Performance
-        const performanceCell = document.createElement('td');
-        performanceCell.className = 'px-2 py-2 text-center text-black font-bold text-4xl';
-        performanceCell.id = `performance-${hour._startDate.getHours()}`;
-        // Handle null/zero values explicitly
-        if (hour.performance === null || hour.performance === undefined || hour.performance === 0) {
-            performanceCell.textContent = '-';
+        // Theoretical Production
+        const theoreticalCell = document.createElement('td');
+        theoreticalCell.className = 'px-2 py-2 text-center text-black font-bold text-7xl';
+        theoreticalCell.id = `theoretical-${hour._startDate.getHours()}`;
+        // Use theoretical_qty field instead of performance
+        if (hour.theoretical_qty === null || hour.theoretical_qty === undefined || hour.theoretical_qty === 0) {
+            theoreticalCell.textContent = '-';
         } else {
-            performanceCell.textContent = `${(hour.performance * 100).toFixed(2)}`;
+            theoreticalCell.textContent = `${Math.round(hour.theoretical_qty)}`;
         }
-        row.appendChild(performanceCell);
+        row.appendChild(theoreticalCell);
         
         tableBody.appendChild(row);
     });
@@ -814,22 +886,40 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
         
+        // Check if this is historical data - if so, don't send periodic updates
+        const now = new Date();
+        const timeDifference = now.getTime() - endTime.getTime();
+        const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
+        const isHistorical = timeDifference > fiveMinutesInMs;
+        
+        if (isHistorical && hasReceivedInitialData) {
+            console.log(`[HISTORICAL DATA] Skipping periodic update for historical data for "${unitName}"`);
+            return;
+        }
+        
         if (unitSocket.readyState === WebSocket.OPEN) {
-            // Show the updating indicator
-            showUpdatingIndicator();
+            // Only show the updating indicator for live data
+            if (!isHistorical) {
+                showUpdatingIndicator();
+            }
             
-            // Use the current global start time but respect shift end time boundaries
-            // For live data, we use current time as end time, but this respects the shift logic
-            const currentTime = new Date();
+            // For historical data, use the original end time
+            // For live data, use current time
+            const requestEndTime = isHistorical ? endTime : new Date();
             
             // Send parameters to request new data
             const params = {
-                start_time: startTime.toISOString(), // This will use the updated startTime if shift changed
-                end_time: currentTime.toISOString(), // Always use current time for hourly updates to get latest data
+                start_time: startTime.toISOString(),
+                end_time: requestEndTime.toISOString(),
                 working_mode: workingModeValue || 'mode1' // Include working mode for break calculations
             };
             
-            console.log(`Requesting updated hourly data for "${unitName}" with start time: ${startTime.toISOString()}, end time: ${currentTime.toISOString()}`);
+            console.log(`[DATA REQUEST] ${unitName}: ${isHistorical ? 'Historical' : 'Live'} data request`, {
+                start: params.start_time,
+                end: params.end_time,
+                isHistorical: isHistorical
+            });
+            
             unitSocket.send(JSON.stringify(params));
         } else {
             console.warn(`Cannot send hourly update request - socket not open for "${unitName}", readyState: ${unitSocket.readyState}`);
@@ -916,7 +1006,7 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                     data.hourly_data.forEach(hour => {
                         const startTime = new Date(hour.hour_start);
                         const endTime = new Date(hour.hour_end);
-                        console.log(`${startTime.getHours()}:00-${endTime.getHours()}:00: Success=${hour.success_qty}, Fail=${hour.fail_qty}, Quality=${hour.quality !== null && hour.quality !== undefined ? (hour.quality * 100).toFixed(2) : 'N/A'}%`);
+                        console.log(`${startTime.getHours()}:00-${endTime.getHours()}:00: Success=${hour.success_qty}, Fail=${hour.fail_qty}, Quality=${hour.quality !== null && hour.quality !== undefined ? (hour.quality * 100).toFixed(0) : 'N/A'}%`);
                     });
                     
                     // Find current hour
@@ -932,9 +1022,9 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                             time: `${new Date(currentHour.hour_start).getHours()}:00-${new Date(currentHour.hour_end).getHours()}:00`,
                             success_qty: currentHour.success_qty,
                             fail_qty: currentHour.fail_qty,
-                            quality: currentHour.quality !== null && currentHour.quality !== undefined ? (currentHour.quality * 100).toFixed(2) + '%' : 'N/A',
-                            performance: currentHour.performance !== null && currentHour.performance !== undefined ? (currentHour.performance * 100).toFixed(2) + '%' : 'N/A',
-                            oee: currentHour.oee !== null && currentHour.oee !== undefined ? (currentHour.oee * 100).toFixed(2) + '%' : 'N/A'
+                            quality: currentHour.quality !== null && currentHour.quality !== undefined ? (currentHour.quality * 100).toFixed(0) + '%' : 'N/A',
+                            performance: currentHour.performance !== null && currentHour.performance !== undefined ? (currentHour.performance * 100).toFixed(1) + '%' : 'N/A',
+                            oee: currentHour.oee !== null && currentHour.oee !== undefined ? (currentHour.oee * 100).toFixed(0) + '%' : 'N/A'
                         });
                     } else {
                         console.warn('No current hour found in hourly data');

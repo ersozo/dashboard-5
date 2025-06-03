@@ -107,6 +107,7 @@ def get_db_connection():
 def get_production_units():
     conn = get_db_connection()
     cursor = conn.cursor()
+    # Temporarily use ProductRecordLog until combined table is created
     cursor.execute("SELECT DISTINCT UnitName FROM ProductRecordLogView ORDER BY UnitName")
     units = [row[0] for row in cursor.fetchall()]
     cursor.close()
@@ -114,13 +115,6 @@ def get_production_units():
     return units
 
 def get_production_data(unit_name, start_time, end_time, current_time=None, working_mode='mode1'):
-    # print("\n=== get_production_data called ===")
-    # print(f"Input parameters:")
-    # print(f"- Unit name: {unit_name}")
-    # print(f"- Start time: {start_time} (type: {type(start_time)}, tzinfo: {start_time.tzinfo})")
-    # print(f"- End time: {end_time} (type: {type(end_time)}, tzinfo: {end_time.tzinfo})")
-    # if current_time:
-    #     print(f"- Current time: {current_time} (type: {type(current_time)}, tzinfo: {current_time.tzinfo})")
     
     # If current_time is not provided, use end_time
     actual_end_time = current_time if current_time else end_time
@@ -139,7 +133,6 @@ def get_production_data(unit_name, start_time, end_time, current_time=None, work
     # Ensure actual_end_time is not before start_time
     if actual_end_time < start_time:
         actual_end_time = start_time
-        # print(f"Warning: Adjusted actual_end_time to match start_time as it was earlier")
     
     # For database query, always use the original end_time but ensure proper timezone
     query_end_time = end_time
@@ -148,31 +141,39 @@ def get_production_data(unit_name, start_time, end_time, current_time=None, work
     elif query_end_time.tzinfo != TIMEZONE:
         query_end_time = query_end_time.astimezone(TIMEZONE)
     
-    # print(f"All times normalized to GMT+3 (Europe/Istanbul)")
-    # print(f"Normalized query times: {start_time} to {query_end_time}")
-    # print(f"Using operational end time: {actual_end_time}")
-    
-    # Use the actual end time provided by the frontend (for proper shift boundaries)
-    # But update to current time if it's a real-time query
+    # Detect if this is historical data or live data
+    # If end_time is more than 5 minutes before current_time, it's historical data
     final_query_end_time = query_end_time
-    if current_time:
-        # If current_time is provided, use it (for real-time updates)
-        final_query_end_time = actual_end_time
     
-    # print(f"Final query end time: {final_query_end_time}")
+    if current_time:
+        time_difference = current_time - query_end_time
+        five_minutes = timedelta(minutes=5)
+        
+        # Only use current_time for live data (end_time is within 5 minutes of current_time)
+        if time_difference <= five_minutes:
+            # This is live data - use current_time as end_time
+            final_query_end_time = actual_end_time
+        else:
+            # This is historical data - use the original end_time
+            final_query_end_time = query_end_time
+            # Also update actual_end_time for performance calculations
+            actual_end_time = query_end_time
     
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # Now execute the main query with the specified time range
-    query = """
+    # Now use ProductRecordLogView since it contains all historical data and targets
+    table_name = "ProductRecordLogView"
+    
+    # Single query approach - when combined table is ready, just change table_name above
+    query = f"""
     SELECT 
         Model,
         SUM(CASE WHEN TestSonucu = 1 THEN 1 ELSE 0 END) as SuccessQty,
         SUM(CASE WHEN TestSonucu = 0 THEN 1 ELSE 0 END) as FailQty,
         ModelSuresiSN as Target
     FROM 
-        ProductRecordLogView
+        {table_name}
     WHERE 
         UnitName = ? 
         AND KayitTarihi BETWEEN ? AND ?
@@ -180,60 +181,76 @@ def get_production_data(unit_name, start_time, end_time, current_time=None, work
         Model, ModelSuresiSN
     """
     
-    # print(f"\nExecuting main query for time range:")
-    # print(f"Start: {start_time}")
-    # print(f"Query End: {final_query_end_time}")
-    # if current_time:
-    #     print(f"Operation End (Current): {actual_end_time}")
-    
-    # Use the properly calculated end time instead of always using current time
     cursor.execute(query, (unit_name, start_time, final_query_end_time))
-    # print("\nQuery executed successfully with current time")
+
+    # print(query)
     
     results = []
     all_rows = cursor.fetchall()
-    # print(f"\nFetched {len(all_rows)} rows from main query")
+    
+    # Calculate operation time once for all models
+    operation_time_total = (actual_end_time - start_time).total_seconds()
+    
+    # Calculate and subtract break time
+    break_time = calculate_break_time(start_time, actual_end_time, working_mode)
+    operation_time = operation_time_total - break_time
+    
+    # Ensure operation time is not negative
+    operation_time = max(operation_time, 0)
+    operation_time_hours = operation_time / 3600
+    
+    # First pass: create model data with individual theoretical quantities for display
+    models_with_target = []
     
     for row in all_rows:
-        # print(f"\nProcessing row: {row}")
         model_data = {
             'model': row[0],
             'success_qty': row[1],
             'fail_qty': row[2],
             'target': row[3],
             'total_qty': row[1],  # Changed: now using only success_qty instead of success + fail
-            'quality': row[1] / (row[1] + row[2]) if (row[1] + row[2]) > 0 else 0
+            'quality': row[1] / (row[1] + row[2]) if (row[1] + row[2]) > 0 else 0,
+            'performance': None,
+            'oee': None
         }
         
-        if row[3]:  # If ModelSuresiSN exists
-            ideal_cycle_time = 3600 / row[3]
-            # Use actual_end_time (current time) instead of end_time for operation time calculation
-            operation_time_total = (actual_end_time - start_time).total_seconds()
-            
-            # Calculate and subtract break time
-            break_time = calculate_break_time(start_time, actual_end_time, working_mode)
-            operation_time = operation_time_total - break_time
-            
-            # Ensure operation time is not negative
-            operation_time = max(operation_time, 0)
-            
-            model_data['performance'] = (model_data['total_qty'] * ideal_cycle_time) / operation_time if operation_time > 0 else 0
-            model_data['oee'] = None  # Remove OEE calculation as per requirement #3
-            # print(f"Calculated metrics for {row[0]}:")
-            # print(f"- Ideal cycle time: {ideal_cycle_time}")
-            # print(f"- Total operation time: {operation_time_total} seconds")
-            # print(f"- Break time: {break_time} seconds")
-            # print(f"- Net operation time: {operation_time} seconds")
-            # print(f"- Performance: {model_data['performance']}")
+        # Calculate individual theoretical quantity for display purposes
+        if row[3] is not None and row[3] > 0:  # Model has target
+            # Individual theoretical quantity = operation_time_hours * model_target
+            individual_theoretical_qty = operation_time_hours * row[3]
+            model_data['theoretical_qty'] = individual_theoretical_qty
+            models_with_target.append(model_data)
         else:
-            model_data['performance'] = None
-            model_data['oee'] = None
-            # print(f"No target (ModelSuresiSN) for model {row[0]}, skipping performance calculation")
+            model_data['theoretical_qty'] = 0
             
         results.append(model_data)
     
+    # Second pass: Calculate performance using individual approach
+    if models_with_target:
+        # Calculate individual performance for each model
+        for model_data in results:
+            if model_data['target'] is not None and model_data['target'] > 0:
+                # Individual theoretical quantity = operation_time_hours * model_target
+                individual_theoretical_qty = operation_time_hours * model_data['target']
+                model_data['theoretical_qty'] = individual_theoretical_qty
+                
+                # Individual performance = actual / theoretical
+                if individual_theoretical_qty > 0:
+                    model_data['performance'] = model_data['total_qty'] / individual_theoretical_qty
+                else:
+                    model_data['performance'] = 0
+            else:
+                model_data['theoretical_qty'] = 0
+                model_data['performance'] = None
+    else:
+        # No models with targets, set all performances to None
+        for model_data in results:
+            if model_data['target'] is not None and model_data['target'] > 0:
+                model_data['performance'] = 0
+    
     cursor.close()
     conn.close()
+
+    # print(results)  
     
-    # print(f"\nReturning {len(results)} results")
     return results 

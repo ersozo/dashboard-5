@@ -195,49 +195,106 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                 
                 # Get production data and filter models with target
                 production_data = get_production_data(unit_name, start_time, end_time, current_time, working_mode)
-                
+                               
                 # For each model, if it has no target, set performance and OEE to None
                 for model in production_data:
                     if not model['target']:
                         model['performance'] = None
                         model['oee'] = None
                 
-                                # Check if connection is still open before sending
+                # Calculate overall summary metrics (backend-calculated)
+                total_success = sum(model['success_qty'] for model in production_data)
+                total_fail = sum(model['fail_qty'] for model in production_data)
+                total_qty = sum(model['total_qty'] for model in production_data)
+                
+                # Calculate weighted quality
+                total_processed = total_success + total_fail
+                total_quality = total_success / total_processed if total_processed > 0 else 0
+                
+                # Calculate overall performance as total actual / total theoretical (same logic as hourly view)
+                models_with_target = [model for model in production_data if model['target'] is not None and model['target'] > 0]
+                total_performance = 0
+                if models_with_target:
+                    # Calculate total actual quantity
+                    total_actual_qty = sum(model['total_qty'] for model in models_with_target)
+                    
+                    # Calculate total theoretical quantity using weighted average target rate
+                    # Use weighted average since models compete for the same production capacity
+                    total_theoretical_qty = 0
+                    
+                    if total_actual_qty > 0:
+                        # Calculate weighted average target rate based on actual production mix
+                        weighted_target_rate = 0
+                        for model in models_with_target:
+                            weight = model['total_qty'] / total_actual_qty
+                            weighted_target_rate += weight * model['target']
+                        
+                        # Get operation time for theoretical calculation (same logic as database.py)
+                        # Need to determine actual end time for calculation
+                        actual_end_time_for_calculation = end_time
+                        if current_time:
+                            time_difference = current_time - end_time
+                            five_minutes = timedelta(minutes=5)
+                            
+                            # Only use current_time for live data (end_time is within 5 minutes of current_time)
+                            if time_difference <= five_minutes:
+                                actual_end_time_for_calculation = current_time
+                            else:
+                                actual_end_time_for_calculation = end_time
+                        
+                        operation_time_total = (actual_end_time_for_calculation - start_time).total_seconds() if actual_end_time_for_calculation > start_time else 0
+                        break_time = calculate_break_time(start_time, actual_end_time_for_calculation, working_mode)
+                        operation_time = max(operation_time_total - break_time, 0)
+                        
+                        # Calculate theoretical quantity using weighted average rate
+                        total_theoretical_qty = (operation_time / 3600) * weighted_target_rate
+                    else:
+                        total_theoretical_qty = 0
+                    
+                    # Calculate overall performance as actual/theoretical ratio
+                    total_performance = total_actual_qty / total_theoretical_qty if total_theoretical_qty > 0 else 0
+                
+                # Create response with both individual model data and summary
+                response_data = {
+                    'unit_name': unit_name,
+                    'models': production_data,
+                    'summary': {
+                        'total_success': total_success,
+                        'total_fail': total_fail,
+                        'total_qty': total_qty,
+                        'total_quality': total_quality,
+                        'total_performance': total_performance
+                    }
+                }
+                
+                
+                # Check if connection is still open before sending
                 if websocket.client_state.name == 'CONNECTED':
-                    await websocket.send_json(production_data)
-                    # print(f"=== Sent updated standard data to client for {unit_name} at {datetime.now(TIMEZONE)} ===")
+                    await websocket.send_json(response_data)
                 else:
-                    # print("WebSocket connection closed, cannot send response")
                     break
                     
                 await asyncio.sleep(30)
             except WebSocketDisconnect:
-                # If websocket is disconnected during processing, break the loop
-                # print(f"WebSocket disconnected during processing for {unit_name}")
                 break
             except ValueError as e:
-                print(f"Error processing WebSocket data: {e}")
+                print(f"[STANDARD DEBUG] ValueError: {e}")
                 try:
                     error_response = {"error": str(e)}
                     await websocket.send_json(error_response)
                 except Exception as e:
-                    # Handle any exception during error response sending
-                    print(f"Could not send error response: {str(e)}")
                     break
             except Exception as e:
-                print(f"Unexpected error in WebSocket connection: {e}")
+                print(f"[STANDARD DEBUG] Exception: {e}")
                 try:
                     error_response = {"error": "An unexpected error occurred"}
                     await websocket.send_json(error_response)
                 except Exception as send_err:
-                    # Handle any exception during error response sending
-                    print(f"Could not send error response: {str(send_err)}")
                     break
     except Exception as e:
         print(f"Outer exception in standard WebSocket handler: {e}")
     finally:
         manager.disconnect(websocket, 'standard')
-        # print(f"WebSocket connection cleaned up for {unit_name}")
 
 # WebSocket endpoint for hourly data
 @app.websocket("/ws/hourly/{unit_name}")
@@ -268,14 +325,8 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 # Get current time in GMT+3
                 current_time = datetime.now(TIMEZONE)
                 
-                # print(f"\n===== HOURLY UPDATE REQUEST: {current_time} =====")
-                # print(f"Processing hourly data for {unit_name}")
-                # print(f"Time range (GMT+3): {start_time} to {end_time}")
-                # print(f"Current time (GMT+3): {current_time}")
-                
                 # Get all raw data in one query for the entire time range
                 raw_data = get_production_data(unit_name, start_time, end_time, current_time, working_mode)
-                # print(f"Retrieved {len(raw_data)} raw data records for the entire period")
                 
                 # Calculate totals from raw data first
                 total_success = sum(model['success_qty'] for model in raw_data)
@@ -285,45 +336,63 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 # Direct calculation of quality as success/total
                 total_quality = total_success / total_qty if total_qty > 0 else 0
                 
-                # print(f"\n=== Final totals for {unit_name} from raw data ===")
-                # print(f"Total success: {total_success}")
-                # print(f"Total fail: {total_fail}")
-                # print(f"Total quantity: {total_qty}")
-                # print(f"Total quality: {total_quality:.4f}" if total_quality is not None else "Total quality: None")
-                
                 # Calculate total performance and OEE using the raw model data
                 models_with_target = [model for model in raw_data if model['target'] is not None]
                 total_performance = None
                 total_oee = None
+                total_theoretical_qty = 0
+                total_theoretical_time = 0
                 
                 if models_with_target:
-                    operation_time_total = (current_time - start_time).total_seconds() if current_time > start_time else 0
+                    # Use same historical vs live detection logic as the hourly processing below
+                    # Detect if this is historical data or live data
+                    actual_end_time_for_calculation = end_time
+                    if current_time:
+                        time_difference = current_time - end_time
+                        five_minutes = timedelta(minutes=5)
+                        
+                        # Only use current_time for live data (end_time is within 5 minutes of current_time)
+                        if time_difference <= five_minutes:
+                            # This is live data - use current_time
+                            actual_end_time_for_calculation = current_time
+                        else:
+                            # This is historical data - use the original end_time
+                            actual_end_time_for_calculation = end_time
+                    
+                    operation_time_total = (actual_end_time_for_calculation - start_time).total_seconds() if actual_end_time_for_calculation > start_time else 0
                     
                     # Calculate and subtract break time
-                    break_time = calculate_break_time(start_time, current_time, working_mode)
+                    break_time = calculate_break_time(start_time, actual_end_time_for_calculation, working_mode)
                     operation_time = operation_time_total - break_time
                     
                     # Ensure operation time is not negative
                     operation_time = max(operation_time, 0)
                     
+                    # Calculate theoretical quantity using weighted average target rate
+                    # Use weighted average since models compete for the same production capacity
+                    total_theoretical_qty = 0
                     total_theoretical_time = 0
+                    total_actual_qty = sum(model['total_qty'] for model in models_with_target)
                     
-                    # Calculate theoretical time for each model
-                    for model in models_with_target:
-                        model_theoretical_time = model['total_qty'] * (3600 / model['target'])
-                        total_theoretical_time += model_theoretical_time
+                    if total_actual_qty > 0:
+                        weighted_target_rate = 0
+                        for model in models_with_target:
+                            weight = model['total_qty'] / total_actual_qty
+                            weighted_target_rate += weight * model['target']
+                            # Calculate theoretical time for performance calculation
+                            model_theoretical_time = model['total_qty'] * (3600 / model['target'])
+                            total_theoretical_time += model_theoretical_time
+                        
+                        # Calculate theoretical quantity using weighted average rate
+                        total_theoretical_qty = (operation_time / 3600) * weighted_target_rate
+                    else:
+                        total_theoretical_qty = 0
                     
-                    # Calculate overall performance 
-                    total_performance = total_theoretical_time / operation_time if operation_time > 0 else 0
+                    # Calculate overall performance as actual/theoretical ratio
+                    total_performance = total_actual_qty / total_theoretical_qty if total_theoretical_qty > 0 else 0
                     
                     # Calculate overall OEE (set to None as per requirement #3)
                     total_oee = None
-                    
-                    # print(f"Total theoretical time: {total_theoretical_time:.2f} seconds")
-                    # print(f"Total operation time: {operation_time_total:.2f} seconds")
-                    # print(f"Break time: {break_time:.2f} seconds")
-                    # print(f"Net operation time: {operation_time:.2f} seconds")
-                    # print(f"Total performance: {total_performance:.4f}" if total_performance is not None else "Total performance: None")
                 else:
                     print("No models with target found")
                 
@@ -331,11 +400,36 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 hourly_data = []
                 
                 # Initialize hourly containers for the entire time range
-                current_hour = start_time.replace(minute=0, second=0, microsecond=0)
+                # Use the same time logic as get_production_data: detect historical vs live data
+                container_start_time = start_time
+                container_end_time = end_time
+                
+                # Detect if this is historical data or live data (same logic as get_production_data)
+                if current_time:
+                    time_difference = current_time - end_time
+                    five_minutes = timedelta(minutes=5)
+                    
+                    # Only use current_time for live data (end_time is within 5 minutes of current_time)
+                    if time_difference <= five_minutes:
+                        # This is live data - use current_time as end_time
+                        container_end_time = current_time
+                        query_end_time = current_time
+                    else:
+                        # This is historical data - use the original end_time
+                        container_end_time = end_time
+                        query_end_time = end_time
+                else:
+                    query_end_time = end_time
+                
+                # Use the same table as get_production_data for consistency
+                # Now use ProductRecordLogView since it contains all historical data and targets
+                table_name = "ProductRecordLogView"
+                
+                current_hour = container_start_time.replace(minute=0, second=0, microsecond=0)
                 hour_containers = {}
                 
-                while current_hour < end_time:
-                    hour_end = min(current_hour + timedelta(hours=1), end_time)
+                while current_hour < container_end_time:
+                    hour_end = min(current_hour + timedelta(hours=1), container_end_time)
                     
                     # Store both the full ISO format and the naive format for easier matching
                     hour_key = current_hour.isoformat()
@@ -347,7 +441,7 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                         'success_qty': 0,
                         'fail_qty': 0,
                         'total_qty': 0,
-                        'is_current': current_hour <= current_time < hour_end
+                        'is_current': current_hour <= current_time < hour_end if current_time else False
                     }
                     
                     # Move to next hour
@@ -357,15 +451,30 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 conn = get_db_connection()
                 cursor = conn.cursor()
                 
-                # Query all individual records for detailed time-based grouping
-                detail_query = """
+                # Ensure timezone conversion is applied to query parameters
+                query_start_time = start_time
+                query_end_time = query_end_time
+                
+                # Ensure both parameters have the same timezone format
+                if query_start_time.tzinfo is None:
+                    query_start_time = TIMEZONE.localize(query_start_time)
+                elif query_start_time.tzinfo != TIMEZONE:
+                    query_start_time = query_start_time.astimezone(TIMEZONE)
+                    
+                if query_end_time.tzinfo is None:
+                    query_end_time = TIMEZONE.localize(query_end_time)
+                elif query_end_time.tzinfo != TIMEZONE:
+                    query_end_time = query_end_time.astimezone(TIMEZONE)
+                
+                # Single query to combined table - no more hybrid logic needed!
+                detail_query = f"""
                 SELECT 
                     Model,
                     KayitTarihi,
                     TestSonucu,
                     ModelSuresiSN as Target
                 FROM 
-                    ProductRecordLogView
+                    {table_name}
                 WHERE 
                     UnitName = ? 
                     AND KayitTarihi BETWEEN ? AND ?
@@ -373,9 +482,8 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     KayitTarihi
                 """
                 
-                cursor.execute(detail_query, (unit_name, start_time, current_time))
+                cursor.execute(detail_query, (unit_name, query_start_time, query_end_time))
                 all_records = cursor.fetchall()
-                # print(f"Retrieved {len(all_records)} individual records for hourly processing")
                 
                 # Group models by hour based on timestamp
                 hourly_models = {}
@@ -436,8 +544,8 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 cursor.close()
                 conn.close()
                 
-                # print("\nHourly data summary:")
                 # Calculate metrics for each hour
+                total_theoretical_qty_corrected = 0  # New variable to accumulate from hourly calculations
                 for hour_key, container in hour_containers.items():
                     hour_start = container['hour_start']
                     hour_end = container['hour_end']
@@ -457,7 +565,8 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                         'total_qty': container['total_qty'],
                         'quality': 0,
                         'performance': None,
-                        'oee': None
+                        'oee': None,
+                        'theoretical_qty': 0
                     }
                     
                     # Calculate quality
@@ -466,7 +575,7 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     else:
                         hour_summary['quality'] = 0
                     
-                    # Calculate performance and OEE for this hour
+                    # Calculate performance, OEE, and theoretical quantity for this hour
                     if hour_model_list:
                         models_with_target = [model for model in hour_model_list if model['target'] is not None]
                         
@@ -485,54 +594,50 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                             # Ensure operation time is not negative
                             operation_time = max(operation_time, 0)
                             
-                            # Calculate theoretical time
+                            # Calculate theoretical time and theoretical quantity
                             hour_theoretical_time = 0
+                            hour_theoretical_qty = 0
+                            
+                            # Calculate theoretical time for each model based on actual production
                             for model in models_with_target:
                                 if model['target'] is not None and model['target'] > 0:
+                                    # Calculate theoretical time for performance calculation
                                     model_theoretical_time = model['total_qty'] * (3600 / model['target'])
                                     hour_theoretical_time += model_theoretical_time
                             
-                            # Calculate performance (remove OEE calculation as per requirement #3)
-                            if operation_time > 0 and hour_theoretical_time > 0:
-                                hour_summary['performance'] = hour_theoretical_time / operation_time
+                            # Calculate theoretical quantity using weighted average target rate
+                            # Use weighted average since models compete for the same production capacity
+                            total_actual_qty = sum(model['total_qty'] for model in models_with_target)
+                            if total_actual_qty > 0:
+                                weighted_target_rate = 0
+                                for model in models_with_target:
+                                    weight = model['total_qty'] / total_actual_qty
+                                    weighted_target_rate += weight * model['target']
+                                
+                                # Calculate theoretical quantity using weighted average rate
+                                hour_theoretical_qty = (operation_time / 3600) * weighted_target_rate
+                            else:
+                                hour_theoretical_qty = 0
+                            
+                            # Calculate performance as actual/theoretical ratio
+                            if operation_time > 0 and hour_theoretical_qty > 0:
+                                # Performance = actual production / theoretical production
+                                hour_performance = total_actual_qty / hour_theoretical_qty
+                                hour_summary['performance'] = hour_performance
                                 hour_summary['oee'] = None  # Remove OEE calculation as per requirement #3
+                                hour_summary['theoretical_qty'] = hour_theoretical_qty
+                            else:
+                                hour_summary['performance'] = 0
+                                hour_summary['theoretical_qty'] = hour_theoretical_qty
+                            
+                            # Add this hour's theoretical quantity to the total
+                            total_theoretical_qty_corrected += hour_theoretical_qty
                     
                     # Add hour to final data
                     hourly_data.append(hour_summary)
                     
-                    # # Log hour summary
-                    # quality_str = f"{hour_summary['quality']*100:.4f}%" if hour_summary['quality'] is not None else "None"
-                    # performance_str = f"{hour_summary['performance']*100:.4f}%" if hour_summary['performance'] is not None else "None"
-                    # oee_str = f"{hour_summary['oee']*100:.4f}%" if hour_summary['oee'] is not None else "None"
-                    
-                    # print(f"Hour {hour_start.hour}:00-{hour_end.hour}:00: " + 
-                    #       f"success={hour_summary['success_qty']}, " +
-                    #       f"fail={hour_summary['fail_qty']}, " +
-                    #       f"total={hour_summary['total_qty']}, " +
-                    #       f"quality={quality_str}, " +
-                    #       f"performance={performance_str}, " +
-                    #       f"oee={oee_str}")
-                
-                # Verify total counts from hourly data match raw data totals
-                hourly_success = sum(hour['success_qty'] for hour in hourly_data)
-                hourly_fail = sum(hour['fail_qty'] for hour in hourly_data)
-                hourly_total = sum(hour['total_qty'] for hour in hourly_data)
-                
-                # print(f"\n=== Verification of hourly totals ===")
-                # print(f"Raw data totals: success={total_success}, fail={total_fail}, total={total_qty}")
-                # print(f"Hourly data totals: success={hourly_success}, fail={hourly_fail}, total={hourly_total}")
-                
-                # if hourly_success != total_success or hourly_fail != total_fail or hourly_total != total_qty:
-                #     print("WARNING: Hourly totals do not match raw data totals!")
-                    # In case of discrepancy, you can optionally normalize hourly data to match raw totals
-                    # But this could hide underlying issues, so we'll keep it commented for now
-                    # total_factor = total_qty / hourly_total if hourly_total > 0 else 1
-                    # for hour in hourly_data:
-                    #     hour['success_qty'] = int(hour['success_qty'] * total_factor)
-                    #     hour['fail_qty'] = int(hour['fail_qty'] * total_factor)
-                    #     hour['total_qty'] = hour['success_qty'] + hour['fail_qty']
-                # else:
-                #     print("Verification successful: Hourly totals match raw data totals")
+                # Use the corrected total theoretical quantity (sum of hourly calculations)
+                total_theoretical_qty = total_theoretical_qty_corrected
                 
                 # Finalize the response data
                 response_data = {
@@ -543,6 +648,7 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     'total_quality': total_quality if total_quality is not None else 0,
                     'total_performance': total_performance if total_performance is not None else 0,
                     'total_oee': total_oee if total_oee is not None else 0,
+                    'total_theoretical_qty': total_theoretical_qty if total_theoretical_qty is not None else 0,
                     'hourly_data': hourly_data
                 }
                 
@@ -558,39 +664,28 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 # Check if connection is still open before sending
                 if websocket.client_state.name == 'CONNECTED':
                     await websocket.send_json(response_data)
-                    # print(f"=== Sent updated data to client at {datetime.now(TIMEZONE)} ===\n")
                 else:
-                    # print("WebSocket connection closed, cannot send response")
                     break
                     
                 await asyncio.sleep(30)
             except WebSocketDisconnect:
-                # If websocket is disconnected during processing, break the loop
-                # print(f"Hourly WebSocket disconnected during processing for {unit_name}")
                 break
             except ValueError as e:
-                # print(f"Error processing hourly WebSocket data: {e}")
                 try:
                     error_response = {"error": str(e)}
                     await websocket.send_json(error_response)
                 except Exception as e:
-                    # Handle any exception during error response sending
-                    # print(f"Could not send error response: {str(e)}")
                     break
             except Exception as e:
-                # print(f"Unexpected error in hourly WebSocket connection: {e}")
                 try:
                     error_response = {"error": "An unexpected error occurred"}
                     await websocket.send_json(error_response)
                 except Exception as send_err:
-                    # Handle any exception during error response sending
-                    # print(f"Could not send error response: {str(send_err)}")
                     break
     except Exception as e:
         print(f"Outer exception in hourly WebSocket handler: {e}")
     finally:
         manager.disconnect(websocket, 'hourly')
-        # print(f"Hourly WebSocket connection cleaned up for {unit_name}")
 
 if __name__ == "__main__":
     import uvicorn
