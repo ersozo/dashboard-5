@@ -164,14 +164,14 @@ function parseInputDateTime(inputValue) {
     return inputValue ? new Date(inputValue) : null;
 }
 
-// Validate if selected time range is within 5-day data retention limit
+// Validate if selected time range is within 14-day data retention limit
 function validateDataRetention(startTime, endTime) {
     const now = new Date();
-    const fiveDaysAgo = new Date(now.getTime() - (5 * 24 * 60 * 60 * 1000)); // 5 days in milliseconds
+    const fourteenDaysAgo = new Date(now.getTime() - (14 * 24 * 60 * 60 * 1000)); // 14 days in milliseconds
     
     // Check if start time is more than 5 days old
-    if (startTime < fiveDaysAgo) {
-        const fiveDaysAgoStr = fiveDaysAgo.toLocaleDateString('tr-TR', {
+    if (startTime < fourteenDaysAgo) {
+        const fourteenDaysAgoStr = fourteenDaysAgo.toLocaleDateString('tr-TR', {
             day: '2-digit',
             month: '2-digit', 
             year: 'numeric',
@@ -187,13 +187,13 @@ function validateDataRetention(startTime, endTime) {
             minute: '2-digit'
         });
         
-        alert(`⚠️ Uyarı: Veritabanında son 5 günlük veri işlenmektedir.\n\nSeçilen başlangıç tarihi ${fiveDaysAgoStr}'den eski.\n\nLütfen ${fiveDaysAgoStr} tarihinden sonra bir zaman aralığı seçiniz.`);
+        alert(`⚠️ Uyarı: Veritabanında son 14 günlük veri işlenmektedir.\n\nSeçilen başlangıç tarihi ${fourteenDaysAgoStr}'den eski.\n\nLütfen ${fourteenDaysAgoStr} tarihinden sonra bir zaman aralığı seçiniz.`);
         return false;
     }
     
     // Check if end time is more than 5 days old  
-    if (endTime < fiveDaysAgo) {
-        const fiveDaysAgoStr = fiveDaysAgo.toLocaleDateString('tr-TR', {
+    if (endTime < fourteenDaysAgo) {
+        const fourteenDaysAgoStr = fourteenDaysAgo.toLocaleDateString('tr-TR', {
             day: '2-digit',
             month: '2-digit',
             year: 'numeric',
@@ -209,7 +209,7 @@ function validateDataRetention(startTime, endTime) {
             minute: '2-digit'
         });
         
-        alert(`⚠️ Uyarı: Veritabanı sadece son 5 günlük veriyi saklıyor.\n\nSeçilen bitiş tarihi çok eski: ${endTimeStr}\n\nLütfen ${fiveDaysAgoStr} tarihinden sonra bir zaman aralığı seçiniz.`);
+        alert(`⚠️ Uyarı: Veritabanı sadece son 14 günlük veriyi saklıyor.\n\nSeçilen bitiş tarihi çok eski: ${endTimeStr}\n\nLütfen ${fourteenDaysAgoStr} tarihinden sonra bir zaman aralığı seçiniz.`);
         return false;
     }
     

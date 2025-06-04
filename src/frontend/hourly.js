@@ -551,7 +551,7 @@ function createOrUpdateHourlyDataDisplay(unitName, data) {
     // Calculate Theoretical Production Quantity from data summary
     let theoreticalValue = '-';
     if (data.total_theoretical_qty !== null && data.total_theoretical_qty !== undefined && data.total_theoretical_qty > 0) {
-        theoreticalValue = `${Math.round(data.total_theoretical_qty)}`;
+        theoreticalValue = Math.round(data.total_theoretical_qty).toLocaleString();
     }
     col2Value.textContent = theoreticalValue;
     
@@ -658,7 +658,7 @@ function updateHourlyDataDisplay(unitName, data) {
     // Update Theoretical Production Quantity from data summary (not from hourly data)
     let theoreticalValue = '-';
     if (data.total_theoretical_qty !== null && data.total_theoretical_qty !== undefined && data.total_theoretical_qty > 0) {
-        theoreticalValue = `${Math.round(data.total_theoretical_qty)}`;
+        theoreticalValue = Math.round(data.total_theoretical_qty).toLocaleString();
     }
     container.theoreticalValue.textContent = theoreticalValue;
     
@@ -831,7 +831,7 @@ function updateTableBody(tableBody, hourlyData) {
         if (hour.theoretical_qty === null || hour.theoretical_qty === undefined || hour.theoretical_qty === 0) {
             theoreticalCell.textContent = '-';
         } else {
-            theoreticalCell.textContent = `${Math.round(hour.theoretical_qty)}`;
+            theoreticalCell.textContent = Math.round(hour.theoretical_qty).toLocaleString();
         }
         row.appendChild(theoreticalCell);
         
