@@ -66,7 +66,7 @@ function handleVisibilityChange() {
         console.log('[VISIBILITY] Tab became visible - forcing immediate data refresh');
         
         // For live data views, update endTime to current time to maintain live status
-        const now = new Date();
+    const now = new Date();
         const originalTimeDifference = now.getTime() - endTime.getTime();
         const fiveMinutesInMs = 5 * 60 * 1000;
         const wasOriginallyLive = originalTimeDifference <= fiveMinutesInMs;
@@ -215,17 +215,7 @@ function stopOptimizedIntervals() {
 function checkForNewTimePeriod() {
     if (!timePresetValue || !startTime || !endTime || !workingModeValue) return false;
 
-    // Check if user is viewing historical data
-    // If the end time is more than 5 minutes in the past, consider it historical
     const now = new Date();
-    const timeDifference = now.getTime() - endTime.getTime();
-    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
-    
-    if (timeDifference > fiveMinutesInMs) {
-        console.log('[HISTORICAL DATA] User is viewing historical data, skipping automatic shift change');
-        return false;
-    }
-
     const currentHour = now.getHours();
     
     // Simple, direct shift boundary detection for Mode 1
@@ -454,32 +444,19 @@ function createLastUpdateDisplay() {
 // Update the last update time display
 function updateLastUpdateTime() {
     if (lastUpdateDisplay) {
-        // Check if this is historical data using centralized function
-        const isHistorical = isDataHistorical();
-        
         const now = new Date();
         const hours = String(now.getHours()).padStart(2, '0');
         const minutes = String(now.getMinutes()).padStart(2, '0');
         const seconds = String(now.getSeconds()).padStart(2, '0');
         
-        let displayText;
-        if (isHistorical) {
-            // For historical data, show the end time range instead of current update time
-            const endHours = String(endTime.getHours()).padStart(2, '0');
-            const endMinutes = String(endTime.getMinutes()).padStart(2, '0');
-            displayText = `📊 Geçmiş Veri: ${endHours}:${endMinutes}`;
-            // Change style for historical data
-            lastUpdateDisplay.classList.remove('bg-gray-800', 'bg-green-600');
-            lastUpdateDisplay.classList.add('bg-gray-600');
-        } else {
-            displayText = `🟢 Canlı Veri: ${hours}:${minutes}:${seconds}`;
-            // Flash effect to indicate update for live data only
+        const displayText = `🟢 Canlı Veri: ${hours}:${minutes}:${seconds}`;
+        
+        // Flash effect to indicate update for live data
             lastUpdateDisplay.classList.add('bg-green-600');
             setTimeout(() => {
                 lastUpdateDisplay.classList.remove('bg-green-600');
                 lastUpdateDisplay.classList.add('bg-gray-800');
             }, 1000);
-        }
         
         lastUpdateDisplay.innerHTML = displayText;
     }
@@ -488,44 +465,19 @@ function updateLastUpdateTime() {
 // Show update in progress indicator
 function showUpdatingIndicator() {
     if (lastUpdateDisplay) {
-        // Check if this is historical data using centralized function
-        const isHistorical = isDataHistorical();
-        
-        if (!isHistorical) {
             lastUpdateDisplay.innerHTML = 'Güncelleniyor...';
             lastUpdateDisplay.classList.remove('bg-gray-800');
             lastUpdateDisplay.classList.add('bg-blue-600');
-        }
     }
 }
 
 // Update current time display
 function updateCurrentTime() {
-    // Check if this is historical data using centralized function
     const now = new Date();
-    
-    // Safety check: if endTime is not set yet, show current time
-    if (!endTime) {
         const hours = String(now.getHours()).padStart(2, '0');
         const minutes = String(now.getMinutes()).padStart(2, '0');
         currentTimeDisplay.textContent = `${hours}:${minutes}`;
         currentTimeDisplay.style.fontSize = ''; // Reset to default size
-        return;
-    }
-    
-    const isHistorical = isDataHistorical();
-    
-    if (isHistorical) {
-        // For historical data, show the title instead of current time
-        currentTimeDisplay.textContent = 'SAATLİK ÜRETİM SAYILARI';
-        currentTimeDisplay.style.fontSize = '4rem'; // Smaller font for the title
-    } else {
-        // For live data, show current time
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        currentTimeDisplay.textContent = `${hours}:${minutes}`;
-        currentTimeDisplay.style.fontSize = ''; // Reset to default size
-    }
 }
 
 // Format date for display
@@ -1034,63 +986,29 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
         
-        // CRITICAL FIX: For shift-based live views, update endTime BEFORE checking if historical
-        // This prevents live shift data from getting permanently stuck in historical mode
-        const isShiftBasedView = timePresetValue && (timePresetValue.startsWith('shift'));
-        if (isShiftBasedView) {
-            const now = new Date();
-            console.log(`[LIVE DATA] Updating endTime for shift-based view "${unitName}"`);
-            console.log(`[LIVE DATA] Old endTime: ${endTime.toISOString()}`);
-            endTime = now;
-            console.log(`[LIVE DATA] New endTime: ${endTime.toISOString()}`);
-        }
-        
-        // Now check if this is historical data using centralized function
-        const isHistorical = isDataHistorical();
-        
-        if (isHistorical && hasReceivedInitialData) {
-            console.log(`[HISTORICAL DATA] Skipping periodic update for historical data for "${unitName}"`);
-            return;
-        }
+        // For live data, always update endTime to current time
+        const now = new Date();
+        console.log(`[LIVE DATA] Updating endTime for live view "${unitName}"`);
+        console.log(`[LIVE DATA] Old endTime: ${endTime.toISOString()}`);
+        endTime = now;
+        console.log(`[LIVE DATA] New endTime: ${endTime.toISOString()}`);
         
         if (unitSocket.readyState === WebSocket.OPEN) {
-            // Only show the updating indicator for live data
-            if (!isHistorical) {
                 showUpdatingIndicator();
-            }
             
-            // For historical data, use the original end time
-            // For live data, use current time (endTime was already updated above for shift-based views)
-            let requestEndTime;
-            if (isHistorical) {
-                requestEndTime = endTime;
-            } else {
-                // For live data, use current time
-                requestEndTime = new Date();
-                
-                // For non-shift-based live views, also update endTime
-                if (!isShiftBasedView) {
-                    console.log(`[LIVE DATA] Updating endTime for non-shift live view "${unitName}"`);
-                    console.log(`[LIVE DATA] Old endTime: ${endTime.toISOString()}`);
-                    endTime = requestEndTime;
-                    console.log(`[LIVE DATA] New endTime: ${endTime.toISOString()}`);
-                }
-                
-                // Note: UI updates will happen when WebSocket response is received to avoid
-                // interfering with the "updating..." indicator
-            }
+            // For live data, always use current time
+            const requestEndTime = new Date();
             
             // Send parameters to request new data
             const params = {
                 start_time: startTime.toISOString(),
                 end_time: requestEndTime.toISOString(),
-                working_mode: workingModeValue || 'mode1' // Include working mode for break calculations
+                working_mode: workingModeValue || 'mode1'
             };
             
-            console.log(`[DATA REQUEST] ${unitName}: ${isHistorical ? 'Historical' : 'Live'} data request`, {
+            console.log(`[DATA REQUEST] ${unitName}: Live data request`, {
                 start: params.start_time,
-                end: params.end_time,
-                isHistorical: isHistorical
+                end: params.end_time
             });
             
             unitSocket.send(JSON.stringify(params));
@@ -1129,13 +1047,6 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             // since browser throttling will delay them anyway
             if (!isTabVisible) {
                 return Math.max(baseInterval, 60000); // At least 60 seconds when hidden
-            }
-            
-            // Check if this is historical data using centralized function
-            const isHistorical = isDataHistorical();
-            
-            if (isHistorical) {
-                return 300000; // 5 minutes for historical data
             }
             
             return baseInterval; // 30 seconds for live data when visible
@@ -1408,7 +1319,7 @@ window.forceLiveMode = function() {
     return debugTimeStatus();
 };
 
-// Centralized function to check if data is historical
+// Centralized function to check if data is historical (for historical data views end time is less than 5 minutes before current time)
 function isDataHistorical() {
     if (!endTime) return false;
     

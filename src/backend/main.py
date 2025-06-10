@@ -57,10 +57,26 @@ async def get_standart_js():
 async def get_hourly_js():
     return FileResponse(os.path.join(FRONTEND_DIR, "hourly.js"))
 
+@app.get("/hourly-historical.js")
+async def get_hourly_historical_js():
+    return FileResponse(os.path.join(FRONTEND_DIR, "hourly-historical.js"))
+
+@app.get("/standart-historical.js")
+async def get_standart_historical_js():
+    return FileResponse(os.path.join(FRONTEND_DIR, "standart-historical.js"))
+
 # Standard view route
 @app.get("/standart.html")
 async def get_standart_html():
     file_path = os.path.join(FRONTEND_DIR, "standart.html")
+    if os.path.exists(file_path):
+        return FileResponse(file_path)
+    else:
+        raise HTTPException(status_code=404, detail=f"File not found at {file_path}")
+
+@app.get("/standart-historical.html")
+async def get_standart_historical_html():
+    file_path = os.path.join(FRONTEND_DIR, "standart-historical.html")
     if os.path.exists(file_path):
         return FileResponse(file_path)
     else:
@@ -75,6 +91,14 @@ async def read_hourly():
 @app.get("/hourly.html")
 async def get_hourly_html():
     file_path = os.path.join(FRONTEND_DIR, "hourly.html")
+    if os.path.exists(file_path):
+        return FileResponse(file_path)
+    else:
+        raise HTTPException(status_code=404, detail=f"File not found at {file_path}")
+
+@app.get("/hourly-historical.html")
+async def get_hourly_historical_html():
+    file_path = os.path.join(FRONTEND_DIR, "hourly-historical.html")
     if os.path.exists(file_path):
         return FileResponse(file_path)
     else:

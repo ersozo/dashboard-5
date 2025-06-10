@@ -159,6 +159,23 @@ function formatDateTimeForInput(date) {
     return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
+// Function to determine if selected time range should be treated as live or historical
+function isLiveDataRequest(startTime, endTime, selectedPreset) {
+    // Decision is based ONLY on the actual end time, not the preset
+    // If end time is recent (within last 5 minutes), treat as live data
+    const now = new Date();
+    const fiveMinutesAgo = new Date(now.getTime() - (5 * 60 * 1000));
+    
+    const isLive = endTime >= fiveMinutesAgo;
+    
+    console.log(`[ROUTING DECISION] End time: ${endTime.toISOString()}`);
+    console.log(`[ROUTING DECISION] Current time: ${now.toISOString()}`);
+    console.log(`[ROUTING DECISION] Time difference: ${Math.round((now.getTime() - endTime.getTime()) / 1000)}s`);
+    console.log(`[ROUTING DECISION] Is Live: ${isLive}`);
+    
+    return isLive;
+}
+
 // Parse datetime-local input value to Date object
 function parseInputDateTime(inputValue) {
     return inputValue ? new Date(inputValue) : null;
@@ -421,6 +438,13 @@ standardViewBtn.addEventListener('click', () => {
         return;
     }
     
+    // Get selected preset
+    const selectedPreset = document.querySelector('input[name="time-preset"]:checked');
+    const presetValue = selectedPreset ? selectedPreset.value : null;
+    
+    // Determine if this should be live or historical data
+    const isLive = isLiveDataRequest(startTime, endTime, presetValue);
+    
     // Create URL parameters
     const params = new URLSearchParams();
     
@@ -440,13 +464,17 @@ standardViewBtn.addEventListener('click', () => {
     }
     
     // Add preset if available
-    const selectedPreset = document.querySelector('input[name="time-preset"]:checked');
-    if (selectedPreset && selectedPreset.value) {
-        params.append('preset', selectedPreset.value);
+    if (presetValue) {
+        params.append('preset', presetValue);
     }
     
+    // Choose the appropriate page based on live vs historical
+    const pageUrl = isLive ? '/standart.html' : '/standart-historical.html';
+    
+    console.log(`[ROUTING] Opening ${isLive ? 'LIVE' : 'HISTORICAL'} standard view: ${pageUrl}`);
+    
     // Open in new window with explicit _blank target to ensure it always opens in a new window
-    const newWindow = window.open(`/standart.html?${params.toString()}`, '_blank');
+    const newWindow = window.open(`${pageUrl}?${params.toString()}`, '_blank');
     if (newWindow) {
         // If successful, focus the new window
         newWindow.focus();
@@ -477,6 +505,13 @@ hourlyViewBtn.addEventListener('click', () => {
         return;
     }
     
+    // Get selected preset
+    const selectedPreset = document.querySelector('input[name="time-preset"]:checked');
+    const presetValue = selectedPreset ? selectedPreset.value : null;
+    
+    // Determine if this should be live or historical data
+    const isLive = isLiveDataRequest(startTime, endTime, presetValue);
+    
     // Create URL parameters
     const params = new URLSearchParams();
     
@@ -496,13 +531,17 @@ hourlyViewBtn.addEventListener('click', () => {
     }
     
     // Add preset if available
-    const selectedPreset = document.querySelector('input[name="time-preset"]:checked');
-    if (selectedPreset && selectedPreset.value) {
-        params.append('preset', selectedPreset.value);
+    if (presetValue) {
+        params.append('preset', presetValue);
     }
     
+    // Choose the appropriate page based on live vs historical
+    const pageUrl = isLive ? '/hourly.html' : '/hourly-historical.html';
+    
+    console.log(`[ROUTING] Opening ${isLive ? 'LIVE' : 'HISTORICAL'} hourly view: ${pageUrl}`);
+    
     // Open in new window with explicit _blank target to ensure it always opens in a new window
-    const newWindow = window.open(`/hourly.html?${params.toString()}`, '_blank');
+    const newWindow = window.open(`${pageUrl}?${params.toString()}`, '_blank');
     if (newWindow) {
         // If successful, focus the new window
         newWindow.focus();

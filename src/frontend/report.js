@@ -173,6 +173,18 @@ function updateTimeDisplay() {
         }
     }
     
+    // Update the main header (h1) based on historical data
+    const mainHeader = document.querySelector('h1');
+    if (mainHeader) {
+        if (isHistorical) {
+            mainHeader.textContent = 'Üretim Raporu - Geçmiş Veri';
+            console.log('REPORT VIEW: Updated main header to HISTORICAL');
+        } else {
+            mainHeader.textContent = 'Üretim Raporu';
+            console.log('REPORT VIEW: Updated main header to LIVE');
+        }
+    }
+    
     // Add historical indicator
     if (isHistorical) {
         timeRangeText = `📊 Geçmiş Veri: ${timeRangeText}`;
