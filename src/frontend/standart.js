@@ -30,6 +30,12 @@ let elementsToFlashOnUpdate = [];
 // Flag to prevent old WebSocket data processing during shift changes
 let isShiftChangeInProgress = false;
 
+// Background tab handling variables
+let isTabVisible = true;
+let lastVisibilityChange = Date.now();
+let visibilityCheckInterval = null;
+let shiftCheckInterval = null;
+
 // Working mode configurations (same as in app.js and hourly.js)
 const workingModes = {
     mode1: {
@@ -55,6 +61,17 @@ const workingModes = {
         ]
     }
 };
+
+// Centralized function to check if data is historical
+function isDataHistorical() {
+    if (!endTime) return false;
+    
+    const now = new Date();
+    const timeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000;
+    
+    return timeDifference > fiveMinutesInMs;
+}
 
 // Function to check if we need to update to a new time period
 function checkForNewTimePeriod() {
@@ -225,6 +242,13 @@ function updateTimePeriod() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Set up visibility change detection for background tab optimization
+    isTabVisible = !document.hidden;
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Start optimized intervals
+    startOptimizedIntervals();
+    
     // Initialize all DOM elements
     unitsContainer = document.getElementById('units-container');
     selectedUnitsDisplay = document.getElementById('selected-units-display');
@@ -310,23 +334,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Load data for each unit
     loadData();
     
-    // Set up periodic checks for new time periods
-    setInterval(() => {
-        if (checkForNewTimePeriod()) {
-            updateTimePeriod();
-            console.log('Standard view: Time period updated automatically');
-        } else {
-            // Debug: Log why no shift change was detected
-            const now = new Date();
-            const currentHour = now.getHours();
-            const shifts = workingModes[workingModeValue].shifts;
-            const currentShiftConfig = shifts.find(s => s.id === timePresetValue);
-            console.log(`[DEBUG] No shift change needed. Current hour: ${currentHour}, Current preset: ${timePresetValue}, Expected shift: ${currentShiftConfig?.name || 'Unknown'}`);
-        }
-    }, 10000); // Check every 10 seconds for aggressive detection
-    
-    // Clean up WebSocket connections when page unloads
+    // Clean up WebSocket connections and intervals when page unloads
     window.addEventListener('beforeunload', () => {
+        stopOptimizedIntervals();
         for (const unitName in unitSockets) {
             if (unitSockets[unitName]) {
                 unitSockets[unitName].close();
@@ -384,11 +394,8 @@ function updateSelectedUnitsDisplay() {
 function updateTimeDisplay() {
     let timeRangeText = `${formatDateForDisplay(startTime)} - ${formatDateForDisplay(endTime)}`;
     
-    // Check if this is historical data
-    const now = new Date();
-    const timeDifference = now.getTime() - endTime.getTime();
-    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
-    const isHistorical = timeDifference > fiveMinutesInMs;
+    // Check if this is historical data using centralized function
+    const isHistorical = isDataHistorical();
     
     // Enhanced debug logging for historical data detection
     console.log('=== STANDARD VIEW HISTORICAL DATA DETECTION DEBUG ===');
@@ -905,11 +912,8 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
         
-        // Check if this is historical data - if so, don't send periodic updates
-        const now = new Date();
-        const timeDifference = now.getTime() - endTime.getTime();
-        const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
-        const isHistorical = timeDifference > fiveMinutesInMs;
+        // Check if this is historical data using centralized function
+        const isHistorical = isDataHistorical();
         
         if (isHistorical && hasReceivedInitialData) {
             console.log(`[HISTORICAL DATA] Skipping periodic update for historical data for "${unitName}"`);
@@ -923,8 +927,23 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             }
             
             // For historical data, use the original end time
-            // For live data, use current time
-            const requestEndTime = isHistorical ? endTime : new Date();
+            // For live data, update endTime to current time to maintain live status
+            let requestEndTime;
+            if (isHistorical) {
+                requestEndTime = endTime;
+            } else {
+                // For live data, update endTime to current time to maintain live status
+                requestEndTime = new Date();
+                
+                // CRITICAL FIX: Update the global endTime for live data to prevent it from becoming historical
+                console.log(`[LIVE DATA] Updating endTime to maintain live status for "${unitName}"`);
+                console.log(`[LIVE DATA] Old endTime: ${endTime.toISOString()}`);
+                endTime = requestEndTime;
+                console.log(`[LIVE DATA] New endTime: ${endTime.toISOString()}`);
+                
+                // Note: UI updates will happen when WebSocket response is received to avoid
+                // interfering with the "updating..." indicator
+            }
             
             // Send parameters to request new data
             const params = {
@@ -978,8 +997,51 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         // Send initial parameters once connected
         sendDataRequest();
         
-        // Set up interval to request data every 30 seconds
-        updateInterval = setInterval(sendDataRequest, 30000);
+        // Set up optimized interval to request data
+        // Use shorter intervals when tab is visible, longer when background
+        const getDataRequestInterval = () => {
+            // Base interval: 30 seconds for live data
+            const baseInterval = 30000;
+            
+            // If tab is in background, use longer interval to avoid unnecessary requests
+            // since browser throttling will delay them anyway
+            if (!isTabVisible) {
+                return Math.max(baseInterval, 60000); // At least 60 seconds when hidden
+            }
+            
+            // Check if this is historical data using centralized function
+            const isHistorical = isDataHistorical();
+            
+            if (isHistorical) {
+                return 300000; // 5 minutes for historical data
+            }
+            
+            return baseInterval; // 30 seconds for live data when visible
+        };
+        
+        // Create adaptive interval that adjusts based on visibility
+        let currentInterval = getDataRequestInterval();
+        updateInterval = setInterval(sendDataRequest, currentInterval);
+        
+        // Monitor visibility changes and adjust interval accordingly
+        const adaptiveIntervalCheck = setInterval(() => {
+            const newInterval = getDataRequestInterval();
+            if (newInterval !== currentInterval) {
+                console.log(`[ADAPTIVE] Updating data request interval for "${unitName}": ${currentInterval}ms → ${newInterval}ms (visible: ${isTabVisible})`);
+                
+                // Clear old interval and create new one
+                if (updateInterval) {
+                    clearInterval(updateInterval);
+                }
+                updateInterval = setInterval(sendDataRequest, newInterval);
+                currentInterval = newInterval;
+            }
+        }, 10000); // Check every 10 seconds for interval adaptation
+        
+        // Store the adaptive check interval for cleanup
+        unitSocket._adaptiveInterval = adaptiveIntervalCheck;
+        
+        console.log(`[WEBSOCKET] Set up adaptive data requests for "${unitName}" with initial interval: ${currentInterval}ms`);
     };
     
     unitSocket.onmessage = (event) => {
@@ -1081,10 +1143,14 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     unitSocket.onerror = (error) => {
         console.error(`WebSocket error for "${unitName}":`, error);
         
-        // Clear the update interval if there's an error
+        // Clear the update interval and adaptive interval if there's an error
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
+        }
+        if (unitSocket._adaptiveInterval) {
+            clearInterval(unitSocket._adaptiveInterval);
+            unitSocket._adaptiveInterval = null;
         }
         
         // Count as completed but with no data
@@ -1096,10 +1162,14 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     };
     
     unitSocket.onclose = (event) => {
-        // Clear the update interval if the socket is closed
+        // Clear the update interval and adaptive interval if the socket is closed
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
+        }
+        if (unitSocket._adaptiveInterval) {
+            clearInterval(unitSocket._adaptiveInterval);
+            unitSocket._adaptiveInterval = null;
         }
         
         // Make sure we call callback if we haven't received initial data yet
@@ -1112,6 +1182,14 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         
         if (!event.wasClean && reconnectAttempts < maxReconnectAttempts) {
             reconnectAttempts++;
+            
+            // Use longer reconnect delay if tab is in background to avoid overwhelming the server
+            const reconnectDelay = !isTabVisible ? 
+                Math.min(30000, 1000 * reconnectAttempts * 3) : // Up to 30s when hidden
+                1000 * reconnectAttempts; // Standard delay when visible
+                
+            console.log(`[RECONNECT] Waiting ${reconnectDelay}ms before reconnect attempt (visible: ${isTabVisible})`);
+            
             setTimeout(() => {
                 connectWebSocket(unitName, startTime, endTime, (data) => {
                     // Only process data on reconnect, don't call original callback
@@ -1121,7 +1199,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                         updateLastUpdateTime();
                     }
                 });
-            }, 1000 * reconnectAttempts); // Increase delay with each attempt
+            }, reconnectDelay);
         } else if (!event.wasClean && reconnectAttempts >= maxReconnectAttempts) {
             console.error(`Failed to connect to WebSocket for "${unitName}" after ${maxReconnectAttempts} attempts`);
         }
@@ -1208,10 +1286,8 @@ function updateLastUpdateTime() {
     const now = new Date();
     lastUpdateTime = now;
     
-    // Check if this is historical data
-    const timeDifference = now.getTime() - endTime.getTime();
-    const fiveMinutesInMs = 5 * 60 * 1000; // 5 minutes in milliseconds
-    const isHistorical = timeDifference > fiveMinutesInMs;
+    // Check if this is historical data using centralized function
+    const isHistorical = isDataHistorical();
     
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
@@ -1257,4 +1333,196 @@ function updateLastUpdateTime() {
         // Clear the flash elements array for historical data
         elementsToFlashOnUpdate = [];
     }
-} 
+}
+
+// Function to handle visibility changes for background tab optimization
+function handleVisibilityChange() {
+    const wasVisible = isTabVisible;
+    isTabVisible = !document.hidden;
+    lastVisibilityChange = Date.now();
+    
+    console.log(`[VISIBILITY] Tab visibility changed: ${wasVisible ? 'visible' : 'hidden'} → ${isTabVisible ? 'visible' : 'hidden'}`);
+    
+    if (!wasVisible && isTabVisible) {
+        // Tab became visible - force immediate refresh
+        console.log('[VISIBILITY] Tab became visible - forcing immediate data refresh');
+        
+        // For live data views, update endTime to current time to maintain live status
+        const now = new Date();
+        const originalTimeDifference = now.getTime() - endTime.getTime();
+        const fiveMinutesInMs = 5 * 60 * 1000;
+        const wasOriginallyLive = originalTimeDifference <= fiveMinutesInMs;
+        
+        console.log(`[VISIBILITY] Original endTime: ${endTime.toISOString()}`);
+        console.log(`[VISIBILITY] Current time: ${now.toISOString()}`);
+        console.log(`[VISIBILITY] Time difference: ${Math.round(originalTimeDifference / 1000)}s`);
+        console.log(`[VISIBILITY] Was originally live: ${wasOriginallyLive}`);
+        
+        // IMPROVED LOGIC: Check if this is a shift-based live data view
+        // If timePresetValue is set (shift1, shift2, shift3), this should be treated as live data
+        const isShiftBasedView = timePresetValue && (timePresetValue.startsWith('shift'));
+        const shouldUpdateEndTime = wasOriginallyLive || isShiftBasedView;
+        
+        console.log(`[VISIBILITY] Is shift-based view: ${isShiftBasedView}`);
+        console.log(`[VISIBILITY] Should update endTime: ${shouldUpdateEndTime}`);
+        
+        if (shouldUpdateEndTime) {
+            // This was originally a live data view or is a shift-based view, so update endTime to maintain live status
+            console.log('[VISIBILITY] Updating endTime to maintain live data status');
+            const oldEndTime = endTime.toISOString();
+            endTime = now;
+            console.log(`[VISIBILITY] EndTime updated: ${oldEndTime} → ${endTime.toISOString()}`);
+            
+            // Update the time display to reflect the new end time
+            updateTimeDisplay();
+            updateLastUpdateTime();
+            
+            // Also check if we need to update to a new shift for live data
+            if (checkForNewTimePeriod()) {
+                console.log('[VISIBILITY] Shift change detected on tab focus');
+                updateTimePeriod();
+                return; // updateTimePeriod will handle the refresh
+            }
+        }
+        
+        // Force data refresh for all active WebSocket connections
+        forceDataRefreshAllUnits();
+        
+        // Force another UI update after data refresh
+        setTimeout(() => {
+            updateTimeDisplay();
+            updateLastUpdateTime();
+            console.log('[VISIBILITY] Forced UI update after data refresh');
+        }, 100);
+    }
+}
+
+// Function to force data refresh for all units
+function forceDataRefreshAllUnits() {
+    console.log('[VISIBILITY] forceDataRefreshAllUnits called');
+    console.log('[VISIBILITY] Current endTime:', endTime.toISOString());
+    console.log('[VISIBILITY] Current time:', new Date().toISOString());
+    
+    // For shift-based live views, always update endTime to maintain live status
+    const isShiftBasedView = timePresetValue && (timePresetValue.startsWith('shift'));
+    if (isShiftBasedView) {
+        const now = new Date();
+        console.log('[VISIBILITY] Updating endTime for shift-based live view');
+        const oldEndTime = endTime.toISOString();
+        endTime = now;
+        console.log(`[VISIBILITY] EndTime updated in forceRefresh: ${oldEndTime} → ${endTime.toISOString()}`);
+    }
+    
+    for (const unitName in unitSockets) {
+        const socket = unitSockets[unitName];
+        if (socket && socket.readyState === WebSocket.OPEN && !socket._isInvalid) {
+            console.log(`[VISIBILITY] Forcing data refresh for unit: ${unitName}`);
+            
+            // Check if this is historical data using centralized function
+            const isHistorical = isDataHistorical();
+            
+            console.log(`[VISIBILITY] Unit ${unitName} - isHistorical: ${isHistorical}`);
+            
+            if (!isHistorical) {
+                const requestEndTime = new Date();
+                const params = {
+                    start_time: startTime.toISOString(),
+                    end_time: requestEndTime.toISOString(),
+                    working_mode: workingModeValue || 'mode1'
+                };
+                
+                console.log(`[VISIBILITY] Sending refresh request for ${unitName}:`, {
+                    start: params.start_time,
+                    end: params.end_time,
+                    working_mode: params.working_mode
+                });
+                
+                showUpdatingIndicator();
+                socket.send(JSON.stringify(params));
+            } else {
+                console.log(`[VISIBILITY] Skipping refresh for ${unitName} - data is historical`);
+            }
+        } else {
+            console.log(`[VISIBILITY] Skipping ${unitName} - socket not ready (state: ${socket ? socket.readyState : 'null'})`);
+        }
+    }
+}
+
+// Optimized interval management for background tabs
+function startOptimizedIntervals() {
+    // Clear any existing intervals
+    stopOptimizedIntervals();
+    
+    // Shift change check (10 seconds normally, but more aggressive when visible)
+    const shiftCheckFrequency = isTabVisible ? 10000 : 30000; // 10s when visible, 30s when hidden
+    shiftCheckInterval = setInterval(() => {
+        if (checkForNewTimePeriod()) {
+            console.log('Standard view: Shift change detected, updating time period...');
+            updateTimePeriod();
+        }
+    }, shiftCheckFrequency);
+    
+    // Visibility check to adapt intervals
+    visibilityCheckInterval = setInterval(() => {
+        const currentVisible = !document.hidden;
+        if (currentVisible !== isTabVisible) {
+            // Visibility state changed, restart intervals with appropriate frequency
+            console.log('[VISIBILITY] Restarting intervals due to visibility change');
+            startOptimizedIntervals();
+        }
+    }, 5000); // Check every 5 seconds
+    
+    console.log(`[INTERVALS] Started optimized intervals - tab visible: ${isTabVisible}`);
+}
+
+function stopOptimizedIntervals() {
+    if (shiftCheckInterval) {
+        clearInterval(shiftCheckInterval);
+        shiftCheckInterval = null;
+    }
+    if (visibilityCheckInterval) {
+        clearInterval(visibilityCheckInterval);
+        visibilityCheckInterval = null;
+    }
+}
+
+// Debug function to test historical vs live detection (call from browser console)
+window.debugTimeStatus = function() {
+    const now = new Date();
+    const timeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000;
+    const isHistorical = timeDifference > fiveMinutesInMs;
+    
+    console.log('=== DEBUG TIME STATUS ===');
+    console.log('Current time:', now.toISOString());
+    console.log('EndTime:', endTime.toISOString());
+    console.log('Time difference (ms):', timeDifference);
+    console.log('Time difference (seconds):', Math.round(timeDifference / 1000));
+    console.log('Time difference (minutes):', Math.round(timeDifference / (1000 * 60)));
+    console.log('5 minute threshold (ms):', fiveMinutesInMs);
+    console.log('Is Historical:', isHistorical);
+    console.log('========================');
+    
+    return {
+        currentTime: now,
+        endTime: endTime,
+        timeDifferenceSeconds: Math.round(timeDifference / 1000),
+        isHistorical: isHistorical
+    };
+};
+
+// Debug function to force live mode (call from browser console)
+window.forceLiveMode = function() {
+    console.log('[DEBUG] Forcing live mode...');
+    const now = new Date();
+    const oldEndTime = endTime.toISOString();
+    endTime = now;
+    console.log(`[DEBUG] EndTime forced: ${oldEndTime} → ${endTime.toISOString()}`);
+    
+    updateTimeDisplay();
+    updateLastUpdateTime();
+    forceDataRefreshAllUnits();
+    
+    console.log('[DEBUG] Live mode forced - UI updated');
+    return debugTimeStatus();
+}; 
