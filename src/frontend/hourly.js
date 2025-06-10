@@ -1034,7 +1034,18 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
         
-        // Check if this is historical data using centralized function
+        // CRITICAL FIX: For shift-based live views, update endTime BEFORE checking if historical
+        // This prevents live shift data from getting permanently stuck in historical mode
+        const isShiftBasedView = timePresetValue && (timePresetValue.startsWith('shift'));
+        if (isShiftBasedView) {
+            const now = new Date();
+            console.log(`[LIVE DATA] Updating endTime for shift-based view "${unitName}"`);
+            console.log(`[LIVE DATA] Old endTime: ${endTime.toISOString()}`);
+            endTime = now;
+            console.log(`[LIVE DATA] New endTime: ${endTime.toISOString()}`);
+        }
+        
+        // Now check if this is historical data using centralized function
         const isHistorical = isDataHistorical();
         
         if (isHistorical && hasReceivedInitialData) {
@@ -1049,19 +1060,21 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             }
             
             // For historical data, use the original end time
-            // For live data, use current time and UPDATE endTime to maintain live status
+            // For live data, use current time (endTime was already updated above for shift-based views)
             let requestEndTime;
             if (isHistorical) {
                 requestEndTime = endTime;
             } else {
-                // For live data, update endTime to current time to maintain live status
+                // For live data, use current time
                 requestEndTime = new Date();
                 
-                // CRITICAL FIX: Update the global endTime for live data to prevent it from becoming historical
-                console.log(`[LIVE DATA] Updating endTime to maintain live status for "${unitName}"`);
-                console.log(`[LIVE DATA] Old endTime: ${endTime.toISOString()}`);
-                endTime = requestEndTime;
-                console.log(`[LIVE DATA] New endTime: ${endTime.toISOString()}`);
+                // For non-shift-based live views, also update endTime
+                if (!isShiftBasedView) {
+                    console.log(`[LIVE DATA] Updating endTime for non-shift live view "${unitName}"`);
+                    console.log(`[LIVE DATA] Old endTime: ${endTime.toISOString()}`);
+                    endTime = requestEndTime;
+                    console.log(`[LIVE DATA] New endTime: ${endTime.toISOString()}`);
+                }
                 
                 // Note: UI updates will happen when WebSocket response is received to avoid
                 // interfering with the "updating..." indicator
