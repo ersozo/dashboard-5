@@ -157,6 +157,23 @@ async def get_report_js():
     else:
         raise HTTPException(status_code=404, detail="Report JavaScript not found")
 
+# Historical Report routes
+@app.get("/report-historical")
+async def get_report_historical():
+    report_file_path = os.path.join(FRONTEND_DIR, "report-historical.html")
+    if os.path.exists(report_file_path):
+        return FileResponse(report_file_path)
+    else:
+        raise HTTPException(status_code=404, detail="Historical report page not found")
+
+@app.get("/report-historical.js")
+async def get_report_historical_js():
+    report_js_path = os.path.join(FRONTEND_DIR, "report-historical.js")
+    if os.path.exists(report_js_path):
+        return FileResponse(report_js_path, media_type="application/javascript")
+    else:
+        raise HTTPException(status_code=404, detail="Historical report JavaScript not found")
+
 # Class to manage WebSocket connections
 class ConnectionManager:
     def __init__(self):
@@ -188,6 +205,105 @@ manager = ConnectionManager()
 async def get_units():
     return get_production_units()
 
+@app.get("/report-data")
+async def get_report_data(units: str, start_time: str, end_time: str, working_mode: str = 'mode1'):
+    """
+    Get aggregated report data for multiple units with weighted performance calculations
+    """
+    try:
+        # Parse unit list (comma-separated)
+        unit_list = [unit.strip() for unit in units.split(',') if unit.strip()]
+        
+        if not unit_list:
+            raise HTTPException(status_code=400, detail="No units specified")
+        
+        # Fix ISO format strings with 'Z' timezone
+        start_time_str = start_time.replace('Z', '+00:00')
+        end_time_str = end_time.replace('Z', '+00:00')
+        
+        # Parse timestamps as UTC first
+        start_time = datetime.fromisoformat(start_time_str)
+        end_time = datetime.fromisoformat(end_time_str)
+        
+        # Convert to application timezone (GMT+3)
+        if start_time.tzinfo is not None:
+            start_time = start_time.astimezone(TIMEZONE)
+            end_time = end_time.astimezone(TIMEZONE)
+        
+        # Get current time in GMT+3
+        current_time = datetime.now(TIMEZONE)
+        
+        # Collect data for all units
+        unit_data = {}
+        total_success_all = 0
+        total_fail_all = 0
+        weighted_quality_sum = 0
+        weighted_performance_sum = 0
+        total_production_all = 0
+        total_success_weight = 0
+        
+        for unit_name in unit_list:
+            # Get production data for this unit
+            production_data = get_production_data(unit_name, start_time, end_time, current_time, working_mode)
+            
+            # Calculate unit totals
+            unit_success = sum(model['success_qty'] for model in production_data)
+            unit_fail = sum(model['fail_qty'] for model in production_data)
+            unit_total = unit_success + unit_fail
+            
+            # Calculate unit quality
+            unit_quality = unit_success / unit_total if unit_total > 0 else 0
+            
+            # Calculate unit performance as sum of model performances
+            unit_performance_sum = 0
+            for model in production_data:
+                if model.get('performance') is not None:
+                    unit_performance_sum += model['performance']
+            
+            # Store unit data
+            unit_data[unit_name] = {
+                'total_success': unit_success,
+                'total_fail': unit_fail,
+                'total_qty': unit_total,
+                'quality': unit_quality,
+                'performance_sum': unit_performance_sum,
+                'models': production_data
+            }
+            
+            # Add to overall totals
+            total_success_all += unit_success
+            total_fail_all += unit_fail
+            total_production_all += unit_total
+            
+            # Add to weighted sums
+            if unit_total > 0:
+                weighted_quality_sum += unit_quality * unit_total
+            
+            if unit_success > 0:
+                weighted_performance_sum += unit_performance_sum * unit_success
+                total_success_weight += unit_success
+        
+        # Calculate overall weighted averages
+        overall_quality = weighted_quality_sum / total_production_all if total_production_all > 0 else 0
+        overall_performance = weighted_performance_sum / total_success_weight if total_success_weight > 0 else 0
+        
+        return {
+            'units': unit_data,
+            'summary': {
+                'total_success': total_success_all,
+                'total_fail': total_fail_all,
+                'total_production': total_production_all,
+                'weighted_quality': overall_quality,
+                'weighted_performance': overall_performance
+            }
+        }
+        
+    except Exception as e:
+        print(f"Error in report data endpoint: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/historical-data/{unit_name}")
 async def get_historical_data(unit_name: str, start_time: str, end_time: str, working_mode: str = 'mode1'):
     try:
@@ -215,8 +331,9 @@ async def get_historical_data(unit_name: str, start_time: str, end_time: str, wo
         total_fail = sum(model['fail_qty'] for model in production_data)
         total_qty = sum(model['total_qty'] for model in production_data)
         
-        # Calculate quality
-        total_quality = total_success / total_qty if total_qty > 0 else 0
+        # Calculate quality (success / processed, not total)
+        total_processed = total_success + total_fail
+        total_quality = total_success / total_processed if total_processed > 0 else 0
         
         # Calculate performance and theoretical quantity
         models_with_target = [model for model in production_data if model['target'] is not None]
@@ -244,6 +361,12 @@ async def get_historical_data(unit_name: str, start_time: str, end_time: str, wo
                 # Calculate performance
                 total_performance = total_actual_qty / total_theoretical_qty if total_theoretical_qty > 0 else 0
         
+        # Calculate unit performance as sum of all model performances
+        unit_performance_sum = 0
+        for model in production_data:
+            if model.get('performance') is not None:
+                unit_performance_sum += model['performance']
+        
         return {
             'unit_name': unit_name,
             'total_success': total_success,
@@ -251,6 +374,7 @@ async def get_historical_data(unit_name: str, start_time: str, end_time: str, wo
             'total_qty': total_qty,
             'total_quality': total_quality,
             'total_performance': total_performance if total_performance is not None else 0,
+            'unit_performance_sum': unit_performance_sum,  # New: sum of model performances
             'total_theoretical_qty': total_theoretical_qty,
             'models': production_data
         }
@@ -459,6 +583,12 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                     # Calculate overall performance as actual/theoretical ratio
                     total_performance = total_actual_qty / total_theoretical_qty if total_theoretical_qty > 0 else 0
                 
+                # Calculate unit performance as sum of all model performances
+                unit_performance_sum = 0
+                for model in production_data:
+                    if model.get('performance') is not None:
+                        unit_performance_sum += model['performance']
+                
                 # Create response with both individual model data and summary
                 response_data = {
                     'unit_name': unit_name,
@@ -468,7 +598,8 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                         'total_fail': total_fail,
                         'total_qty': total_qty,
                         'total_quality': total_quality,
-                        'total_performance': total_performance
+                        'total_performance': total_performance,
+                        'unit_performance_sum': unit_performance_sum  # New: sum of model performances
                     }
                 }
                 
@@ -538,8 +669,9 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 total_fail = sum(model['fail_qty'] for model in raw_data)
                 total_qty = sum(model['total_qty'] for model in raw_data)
                 
-                # Direct calculation of quality as success/total
-                total_quality = total_success / total_qty if total_qty > 0 else 0
+                # Direct calculation of quality as success/processed
+                total_processed = total_success + total_fail
+                total_quality = total_success / total_processed if total_processed > 0 else 0
                 
                 # Calculate total performance and OEE using the raw model data
                 models_with_target = [model for model in raw_data if model['target'] is not None]

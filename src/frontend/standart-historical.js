@@ -129,19 +129,30 @@ function loadHistoricalData() {
     selectedUnits.forEach(unitName => {
         fetchHistoricalData(unitName, startTime, endTime, (data) => {
             if (data) {
+                // Store the full response to preserve backend-calculated values
                 if (data.models && Array.isArray(data.models)) {
-                    unitData[unitName] = data.models;
-                    console.log(`[HISTORICAL] Received data for "${unitName}": ${data.models.length} records`);
+                    // New backend response format with summary
+                    unitData[unitName] = {
+                        models: data.models,
+                        summary: {
+                            total_success: data.total_success,
+                            total_fail: data.total_fail,
+                            total_quality: data.total_quality,
+                            unit_performance_sum: data.unit_performance_sum
+                        }
+                    };
+                    console.log(`[HISTORICAL] Received data for "${unitName}": ${data.models.length} records with backend summary`);
                 } else if (Array.isArray(data)) {
-                    unitData[unitName] = data;
-                    console.log(`[HISTORICAL] Received data for "${unitName}": ${data.length} records`);
+                    // Legacy format - just models array
+                    unitData[unitName] = { models: data, summary: null };
+                    console.log(`[HISTORICAL] Received data for "${unitName}": ${data.length} records (legacy format)`);
                 } else {
                     console.log(`[HISTORICAL] Unexpected data structure for "${unitName}":`, data);
-                    unitData[unitName] = [];
+                    unitData[unitName] = { models: [], summary: null };
                 }
             } else {
                 console.log(`[HISTORICAL] No data received for "${unitName}"`);
-                unitData[unitName] = [];
+                unitData[unitName] = { models: [], summary: null };
             }
             completedRequests++;
             if (completedRequests === totalRequests) {
@@ -177,7 +188,9 @@ function updateUI() {
     console.log('[HISTORICAL] unitData:', unitData);
     console.log('[HISTORICAL] unitData keys:', Object.keys(unitData));
     Object.keys(unitData).forEach(unit => {
-        console.log(`[HISTORICAL] ${unit} has ${unitData[unit] ? unitData[unit].length : 0} records`);
+        const unitDataObj = unitData[unit];
+        const modelsCount = (unitDataObj && unitDataObj.models) ? unitDataObj.models.length : 0;
+        console.log(`[HISTORICAL] ${unit} has ${modelsCount} records`);
     });
     
     // Update summary
@@ -197,32 +210,85 @@ function updateSummary() {
     let totalSuccessSum = 0;
     let totalFailSum = 0;
     let totalQualitySum = 0;
-    let totalOEESum = 0;
     let unitsWithQuality = 0;
-    let unitsWithOEE = 0;
     
-    Object.values(unitData).forEach(data => {
-        if (data && Array.isArray(data)) {
-            data.forEach((row, index) => {
-                // Debug first row to see data structure
-                if (index === 0) {
-                    console.log('[HISTORICAL] Sample row data:', row);
-                    console.log('[HISTORICAL] Row fields:', Object.keys(row));
-                }
+    // Unit-level calculations for weighted averages
+    let unitPerformances = [];
+    let unitSuccessValues = [];
+    let unitQualityValues = [];
+    let unitProductionValues = [];
+    
+    Object.entries(unitData).forEach(([unitName, unitDataObj]) => {
+        if (unitDataObj && unitDataObj.models) {
+            const data = unitDataObj.models;
+            
+            // Use backend-calculated values if available
+            if (unitDataObj.summary && unitDataObj.summary.unit_performance_sum !== undefined) {
+                const summary = unitDataObj.summary;
                 
-                totalSuccessSum += row.success_qty || 0;
-                totalFailSum += row.fail_qty || 0;
+                totalSuccessSum += summary.total_success || 0;
+                totalFailSum += summary.total_fail || 0;
                 
-                if (row.quality !== null && row.quality !== undefined) {
-                    totalQualitySum += row.quality;
+                const unitProduction = (summary.total_success || 0) + (summary.total_fail || 0);
+                if (unitProduction > 0) {
+                    unitQualityValues.push(summary.total_quality || 0);
+                    unitProductionValues.push(unitProduction);
                     unitsWithQuality++;
                 }
                 
-                if (row.performance !== null && row.performance !== undefined) {
-                    totalOEESum += row.performance;
-                    unitsWithOEE++;
+                if ((summary.total_success || 0) > 0) {
+                    unitPerformances.push(summary.unit_performance_sum || 0);
+                    unitSuccessValues.push(summary.total_success || 0);
                 }
-            });
+            } else if (Array.isArray(data)) {
+                // Fallback to frontend calculation
+                let unitSuccess = 0;
+                let unitFail = 0;
+                let unitPerformanceSum = 0;
+                let unitQualityWeightedSum = 0;
+                let unitProductionTotal = 0;
+                
+                data.forEach((row, index) => {
+                    // Debug first row to see data structure
+                    if (index === 0) {
+                        console.log('[HISTORICAL] Sample row data:', row);
+                        console.log('[HISTORICAL] Row fields:', Object.keys(row));
+                    }
+                    
+                    unitSuccess += row.success_qty || 0;
+                    unitFail += row.fail_qty || 0;
+                    
+                    // Sum performance values for this unit
+                    if (row.performance !== null && row.performance !== undefined) {
+                        unitPerformanceSum += row.performance;
+                    }
+                    
+                    // Calculate weighted quality for this unit
+                    const rowProduction = (row.success_qty || 0) + (row.fail_qty || 0);
+                    if (rowProduction > 0) {
+                        const rowQuality = (row.success_qty || 0) / rowProduction;
+                        unitQualityWeightedSum += rowQuality * rowProduction;
+                        unitProductionTotal += rowProduction;
+                    }
+                });
+                
+                // Add to overall totals
+                totalSuccessSum += unitSuccess;
+                totalFailSum += unitFail;
+                
+                // Store unit-level values for weighted calculations
+                if (unitProductionTotal > 0) {
+                    const unitQuality = unitQualityWeightedSum / unitProductionTotal;
+                    unitQualityValues.push(unitQuality);
+                    unitProductionValues.push(unitProductionTotal);
+                    unitsWithQuality++;
+                }
+                
+                if (unitSuccess > 0) {
+                    unitPerformances.push(unitPerformanceSum);
+                    unitSuccessValues.push(unitSuccess);
+                }
+            }
         }
     });
     
@@ -230,16 +296,34 @@ function updateSummary() {
     totalSuccess.textContent = totalSuccessSum.toLocaleString();
     totalFail.textContent = totalFailSum.toLocaleString();
     
+    // Calculate weighted average quality
     if (unitsWithQuality > 0) {
-        const avgQuality = (totalQualitySum / unitsWithQuality) * 100;
-        totalQuality.textContent = `${avgQuality.toFixed(1)}%`;
+        let weightedQualitySum = 0;
+        let totalProduction = 0;
+        
+        for (let i = 0; i < unitQualityValues.length; i++) {
+            weightedQualitySum += unitQualityValues[i] * unitProductionValues[i];
+            totalProduction += unitProductionValues[i];
+        }
+        
+        const avgQuality = totalProduction > 0 ? (weightedQualitySum / totalProduction) * 100 : 0;
+        totalQuality.textContent = `${avgQuality.toFixed(0)}%`;
     } else {
         totalQuality.textContent = 'N/A';
     }
     
-    if (unitsWithOEE > 0) {
-        const avgOEE = (totalOEESum / unitsWithOEE) * 100;
-        totalPerformance.textContent = `${avgOEE.toFixed(1)}%`;
+    // Calculate weighted average performance based on unit success values
+    if (unitPerformances.length > 0) {
+        let weightedPerformanceSum = 0;
+        let totalSuccessWeight = 0;
+        
+        for (let i = 0; i < unitPerformances.length; i++) {
+            weightedPerformanceSum += unitPerformances[i] * unitSuccessValues[i];
+            totalSuccessWeight += unitSuccessValues[i];
+        }
+        
+        const avgOEE = totalSuccessWeight > 0 ? (weightedPerformanceSum / totalSuccessWeight) * 100 : 0;
+        totalPerformance.textContent = `${avgOEE.toFixed(0)}%`;
     } else {
         totalPerformance.textContent = 'N/A';
     }
@@ -247,8 +331,8 @@ function updateSummary() {
     console.log('[HISTORICAL] Summary updated:', {
         success: totalSuccessSum,
         fail: totalFailSum,
-        quality: unitsWithQuality > 0 ? (totalQualitySum / unitsWithQuality * 100).toFixed(1) + '%' : 'N/A',
-        performance: unitsWithOEE > 0 ? (totalOEESum / unitsWithOEE * 100).toFixed(1) + '%' : 'N/A'
+        quality: totalQuality.textContent,
+        performance: totalPerformance.textContent
     });
 }
 
@@ -266,15 +350,15 @@ function createUnitTables(unitDataMap) {
         return;
     }
     
-    Object.entries(unitDataMap).forEach(([unitName, data]) => {
-        console.log(`[HISTORICAL] Creating section for ${unitName} with data:`, data);
-        const unitSection = createUnitSection(unitName, data);
+    Object.entries(unitDataMap).forEach(([unitName, unitDataObj]) => {
+        console.log(`[HISTORICAL] Creating section for ${unitName} with data:`, unitDataObj);
+        const unitSection = createUnitSection(unitName, unitDataObj);
         unitsContainer.appendChild(unitSection);
     });
 }
 
 // Create a section for a single unit
-function createUnitSection(unitName, data) {
+function createUnitSection(unitName, unitDataObj) {
     const section = document.createElement('div');
     section.className = 'bg-white rounded-lg shadow p-6 mb-8'; // Added margin-bottom to match live version
     
@@ -291,12 +375,42 @@ function createUnitSection(unitName, data) {
     unitTitle.textContent = unitName;
     headerContent.appendChild(unitTitle);
     
+    // Get the models data
+    const data = unitDataObj.models || [];
+    
     // Create unit success count
     const successCount = document.createElement('div');
     successCount.className = 'text-lg font-medium text-green-600 bg-green-50 px-3 py-1 rounded-lg';
-    const totalSuccess = data.reduce((sum, model) => sum + (model.success_qty || 0), 0);
+    
+    // Use backend-calculated value if available, otherwise calculate from models
+    let totalSuccess = 0;
+    if (unitDataObj.summary && unitDataObj.summary.total_success !== undefined) {
+        totalSuccess = unitDataObj.summary.total_success;
+    } else {
+        totalSuccess = data.reduce((sum, model) => sum + (model.success_qty || 0), 0);
+    }
+    
     successCount.textContent = `OK: ${totalSuccess}`;
     headerContent.appendChild(successCount);
+    
+    // Create unit performance sum
+    const performanceSum = document.createElement('div');
+    performanceSum.className = 'text-lg font-medium text-blue-600 bg-blue-50 px-3 py-1 rounded-lg ml-2';
+    
+    // Use backend-calculated unit performance sum if available, otherwise calculate from models
+    let totalPerformance = 0;
+    if (unitDataObj.summary && unitDataObj.summary.unit_performance_sum !== undefined) {
+        // Use backend-calculated value
+        totalPerformance = unitDataObj.summary.unit_performance_sum;
+    } else {
+        // Fallback: calculate from models
+        totalPerformance = data.reduce((sum, model) => {
+            return sum + (model.performance !== null && model.performance !== undefined ? model.performance : 0);
+        }, 0);
+    }
+    
+    performanceSum.textContent = `OEE: ${(totalPerformance * 100).toFixed(0)}%`;
+    headerContent.appendChild(performanceSum);
     
     unitHeader.appendChild(headerContent);
     section.appendChild(unitHeader);
@@ -382,7 +496,7 @@ function createUnitSection(unitName, data) {
         const performanceTd = document.createElement('td');
         performanceTd.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-500';
         const performance = (row.performance !== undefined && row.performance !== null) 
-            ? (row.performance * 100).toFixed(2) 
+            ? (row.performance * 100).toFixed(0) 
             : '-';
         performanceTd.textContent = performance;
         tr.appendChild(performanceTd);

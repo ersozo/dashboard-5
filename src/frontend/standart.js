@@ -634,7 +634,7 @@ function updateUI() {
                 const performanceElement = document.getElementById(`performance-${unit.replace(/\s+/g, '-')}-${model.model.replace(/\s+/g, '-')}`);
                 if (performanceElement) {
                     const performance = (model.performance !== undefined && model.performance !== null) 
-                        ? (model.performance * 100).toFixed(1) 
+                        ? (model.performance * 100).toFixed(0) 
                         : '-';
                     if (performanceElement.textContent != performance) {
                         performanceElement.textContent = performance;
@@ -703,6 +703,28 @@ function createUnitTables(unitDataMap) {
         // Add to elements that should flash when updated
         elementsToFlashOnUpdate.push(successCount);
         headerContent.appendChild(successCount);
+        
+        // Create unit performance sum
+        const performanceSum = document.createElement('div');
+        performanceSum.className = 'text-lg font-medium text-blue-600 bg-blue-50 px-3 py-1 rounded-lg ml-2';
+        
+        // Use backend-calculated unit performance sum if available, otherwise calculate from models
+        let totalPerformance = 0;
+        if (unitDataMap[unit] && unitDataMap[unit].summary && unitDataMap[unit].summary.unit_performance_sum !== undefined) {
+            // Use backend-calculated value
+            totalPerformance = unitDataMap[unit].summary.unit_performance_sum;
+        } else {
+            // Fallback: calculate from models
+            totalPerformance = models.reduce((sum, model) => {
+                return sum + (model.performance !== null && model.performance !== undefined ? model.performance : 0);
+            }, 0);
+        }
+        
+        performanceSum.textContent = `OEE: ${(totalPerformance * 100).toFixed(0)}%`;
+        performanceSum.id = `performance-sum-${unit.replace(/\s+/g, '-')}`;
+        // Add to elements that should flash when updated
+        elementsToFlashOnUpdate.push(performanceSum);
+        headerContent.appendChild(performanceSum);
         
         unitHeader.appendChild(headerContent);
         unitContainer.appendChild(unitHeader);
@@ -785,7 +807,7 @@ function createUnitTables(unitDataMap) {
             performanceCell.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-500';
             performanceCell.id = `performance-${unit.replace(/\s+/g, '-')}-${model.model.replace(/\s+/g, '-')}`;
             const performance = (model.performance !== undefined && model.performance !== null) 
-                ? (model.performance * 100).toFixed(2) 
+                ? (model.performance * 100).toFixed(0) 
                 : '-';
             performanceCell.textContent = performance;
                 row.appendChild(performanceCell);
@@ -1155,10 +1177,10 @@ function updateSummary() {
                 qualitySum += (summary.total_quality || 0) * unitTotalProcessed;
             }
             
-            // Include performance if valid
-            if (summary.total_performance !== null && summary.total_performance !== undefined) {
-                performanceSum += summary.total_performance;
-                unitsWithSummary++;
+            // Include performance if valid - weight by unit success for weighted average
+            if (summary.total_performance !== null && summary.total_performance !== undefined && (summary.total_success || 0) > 0) {
+                performanceSum += (summary.total_performance || 0) * (summary.total_success || 0);
+                unitsWithSummary += (summary.total_success || 0);
             }
         }
     }

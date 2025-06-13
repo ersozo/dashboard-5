@@ -10,18 +10,13 @@ let totalSuccessChart = null;
 let totalFailChart = null;
 let qualityChart = null;
 let performanceChart = null;
-let oeeChart = null;
 
 // Unit data storage
 let unitData = {};
-let unitSockets = {};
-
-// Track elements that need flash animation on update
-let elementsToFlashOnUpdate = [];
 
 // Current sort metric and order
-let currentSortMetric = 'totalSuccess'; // default sort by total success
-let currentSortOrder = 'desc'; // desc or asc
+let currentSortMetric = 'totalSuccess';
+let currentSortOrder = 'desc';
 
 // UI elements
 let loadingIndicator;
@@ -29,10 +24,9 @@ let chartsContainer;
 let selectedUnitsDisplay;
 let timeRangeDisplay;
 let lastUpdateTimeElement;
-let updateIndicator;
 let summaryContainer;
 
-// Working mode configurations (same as other views)
+// Working mode configurations
 const workingModes = {
     mode1: {
         name: 'Mod 1 (Mevcut)',
@@ -65,7 +59,6 @@ document.addEventListener('DOMContentLoaded', () => {
     selectedUnitsDisplay = document.getElementById('selected-units-display');
     timeRangeDisplay = document.getElementById('time-range-display');
     lastUpdateTimeElement = document.getElementById('last-update-time');
-    updateIndicator = document.getElementById('update-indicator');
     summaryContainer = document.getElementById('summary-container');
 
     // Parse URL parameters
@@ -88,6 +81,14 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
     
+    console.log('[HISTORICAL REPORT] Parameters:', {
+        units: selectedUnits,
+        start: startTime.toISOString(),
+        end: endTime.toISOString(),
+        preset: timePresetValue,
+        workingMode: workingModeValue
+    });
+    
     // Update UI with parameters
     updateSelectedUnitsDisplay();
     updateTimeDisplay();
@@ -96,22 +97,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Setup sort functionality for summary cards
     setupSortingEventListeners();
     
-    // Load data and create charts
-    loadData();
-    
-    // Clean up on page unload
-    window.addEventListener('beforeunload', () => {
-        for (const unitName in unitSockets) {
-            if (unitSockets[unitName]) {
-                unitSockets[unitName].close();
-            }
-        }
-    });
+    // Load historical data
+    loadHistoricalData();
 });
 
 // Setup sorting event listeners for summary cards
 function setupSortingEventListeners() {
-    // Get all summary cards (using more specific selectors to avoid conflicts)
     const summaryCards = [
         { element: document.querySelector('.bg-yellow-100'), metric: 'totalSuccess', name: 'Toplam Üretim' },
         { element: document.querySelector('.bg-red-100'), metric: 'totalFail', name: 'Toplam Tamir' },
@@ -121,11 +112,9 @@ function setupSortingEventListeners() {
     
     summaryCards.forEach(card => {
         if (card.element) {
-            // Add cursor pointer style
             card.element.style.cursor = 'pointer';
             card.element.style.transition = 'transform 0.2s, box-shadow 0.2s';
             
-            // Add hover effects
             card.element.addEventListener('mouseenter', () => {
                 card.element.style.transform = 'scale(1.02)';
                 card.element.style.boxShadow = '0 4px 8px rgba(0,0,0,0.15)';
@@ -136,9 +125,7 @@ function setupSortingEventListeners() {
                 card.element.style.boxShadow = 'none';
             });
             
-            // Add click event listener
             card.element.addEventListener('click', () => {
-                // Toggle sort order if clicking the same metric, otherwise set to desc
                 if (currentSortMetric === card.metric) {
                     currentSortOrder = currentSortOrder === 'desc' ? 'asc' : 'desc';
                 } else {
@@ -146,27 +133,21 @@ function setupSortingEventListeners() {
                     currentSortOrder = 'desc';
                 }
                 
-                // Update visual indicators
                 updateSortIndicators();
-                
-                // Re-sort and update charts
                 updateCharts();
                 
-                console.log(`Sorting by ${card.name} (${card.metric}) in ${currentSortOrder} order`);
+                console.log(`[HISTORICAL REPORT] Sorting by ${card.name} (${card.metric}) in ${currentSortOrder} order`);
             });
         }
     });
     
-    // Set initial sort indicator
     updateSortIndicators();
 }
 
 // Update visual indicators for current sort
 function updateSortIndicators() {
-    // Remove all existing sort indicators
     document.querySelectorAll('.sort-indicator').forEach(el => el.remove());
     
-    // Find the current metric's card and add indicator
     const metricToSelector = {
         'totalSuccess': '.bg-yellow-100',
         'totalFail': '.bg-red-100',
@@ -176,7 +157,6 @@ function updateSortIndicators() {
     
     const currentCard = document.querySelector(metricToSelector[currentSortMetric]);
     if (currentCard) {
-        // Add sort indicator
         const indicator = document.createElement('div');
         indicator.className = 'sort-indicator absolute top-2 right-2 text-xs font-bold';
         indicator.innerHTML = currentSortOrder === 'desc' ? '↓' : '↑';
@@ -186,18 +166,14 @@ function updateSortIndicators() {
         indicator.style.fontSize = '16px';
         indicator.style.fontWeight = 'bold';
         
-        // Make the card relative positioned if it isn't already
         if (getComputedStyle(currentCard).position === 'static') {
             currentCard.style.position = 'relative';
         }
         
         currentCard.appendChild(indicator);
-        
-        // Add a subtle border to indicate it's the active sort
         currentCard.style.border = '2px solid rgba(59, 130, 246, 0.5)';
     }
     
-    // Remove border from other cards
     const allCards = ['.bg-yellow-100', '.bg-red-100', '#summary-container .bg-green-100', '#summary-container .bg-blue-100'];
     allCards.forEach(selector => {
         const card = document.querySelector(selector);
@@ -209,13 +185,11 @@ function updateSortIndicators() {
 
 // Get sorted unit data based on current sort settings
 function getSortedUnitData() {
-    // Calculate metrics for all units
     const unitMetricsWithNames = selectedUnits.map(unit => ({
         name: unit,
         metrics: calculateUnitMetrics(unit)
     }));
     
-    // Sort based on current metric and order
     unitMetricsWithNames.sort((a, b) => {
         const aValue = a.metrics[currentSortMetric];
         const bValue = b.metrics[currentSortMetric];
@@ -245,7 +219,7 @@ function updateSelectedUnitsDisplay() {
     });
 }
 
-// Update time range display for live data
+// Update time range display
 function updateTimeDisplay() {
     let timeRangeText = `${formatDateForDisplay(startTime)} - ${formatDateForDisplay(endTime)}`;
     
@@ -260,13 +234,12 @@ function updateTimeDisplay() {
         }
     }
     
-    // Live data indicator
-    timeRangeText = `🟢 Canlı Veri: ${timeRangeText}`;
+    timeRangeText = `📊 Geçmiş Veri: ${timeRangeText}`;
     
     if (timeRangeDisplay) {
         timeRangeDisplay.textContent = timeRangeText;
-        timeRangeDisplay.style.color = '#1F2937'; // Normal dark color
-        timeRangeDisplay.style.fontStyle = 'normal';
+        timeRangeDisplay.style.color = '#6B7280';
+        timeRangeDisplay.style.fontStyle = 'italic';
     }
 }
 
@@ -283,195 +256,67 @@ function formatDateForDisplay(date) {
     return `${day}.${month}.${year} ${hours}:${minutes}`;
 }
 
-// Update last update time for live data
+// Update last update time for historical data
 function updateLastUpdateTime() {
-    const now = new Date();
-    
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    
-    lastUpdateTimeElement.textContent = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
-    
-    // Apply flash effect to elements that changed
-    const elementsToFlash = [...elementsToFlashOnUpdate]; // Create a copy
-    elementsToFlashOnUpdate = []; // Clear the array for next update
-    
-    // Flash elements that need to show update
-    elementsToFlash.forEach(element => {
-        if (element && element.classList) {
-            // Add flash effect
-            element.classList.add('animate-flash');
-            // Remove flash effect after animation completes
-            setTimeout(() => {
-                element.classList.remove('animate-flash');
-            }, 1000);
-        }
-    });
+    lastUpdateTimeElement.textContent = `Geçmiş veri: ${formatDateForDisplay(endTime)}`;
 }
 
-// Load data for all units
-function loadData() {
-    // Show loading, hide charts
+// Load historical data for all units
+function loadHistoricalData() {
     loadingIndicator.classList.remove('hidden');
-    chartsContainer.classList.add('hidden');
-    
-    // Initialize unit data
-    selectedUnits.forEach(unit => {
-        unitData[unit] = { models: [], summary: null };
-    });
     
     let completedRequests = 0;
+    const totalRequests = selectedUnits.length;
     
     function checkAllRequestsCompleted() {
         completedRequests++;
-        if (completedRequests === selectedUnits.length) {
-            createCharts();
+        if (completedRequests === totalRequests) {
+            console.log('[HISTORICAL REPORT] All data loaded, creating charts');
             loadingIndicator.classList.add('hidden');
-            chartsContainer.classList.remove('hidden');
             summaryContainer.classList.remove('hidden');
-            updateLastUpdateTime();
+            chartsContainer.classList.remove('hidden');
+            createCharts();
         }
     }
     
-    // Connect to WebSocket for each unit
-    selectedUnits.forEach(unit => {
-        connectWebSocket(unit, startTime, endTime, () => {
+    selectedUnits.forEach(unitName => {
+        fetchHistoricalReportData(unitName, startTime, endTime, (data) => {
+            if (data) {
+                unitData[unitName] = data;
+                console.log(`[HISTORICAL REPORT] Data loaded for ${unitName}:`, data);
+            } else {
+                console.error(`[HISTORICAL REPORT] Failed to load data for ${unitName}`);
+                unitData[unitName] = null;
+            }
             checkAllRequestsCompleted();
         });
     });
 }
 
-// Connect to WebSocket and handle data
-function connectWebSocket(unitName, startTime, endTime, callback) {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/${unitName}`;
+// Fetch historical report data using HTTP endpoint
+function fetchHistoricalReportData(unitName, startTime, endTime, callback) {
+    const url = new URL(`/historical-data/${encodeURIComponent(unitName)}`, window.location.origin);
+    url.searchParams.append('start_time', startTime.toISOString());
+    url.searchParams.append('end_time', endTime.toISOString());
+    url.searchParams.append('working_mode', workingModeValue || 'mode1');
     
-    const unitSocket = new WebSocket(wsUrl);
-    unitSockets[unitName] = unitSocket;
+    console.log(`[HISTORICAL REPORT] Fetching data for ${unitName} from:`, url.toString());
     
-    let hasReceivedInitialData = false;
-    let updateInterval = null;
-    
-    function sendDataRequest() {
-        if (unitSocket.readyState === WebSocket.OPEN) {
-            // For live data, use current time as end time
-            const currentEndTime = new Date();
-            const params = {
-                start_time: startTime.toISOString(),
-                end_time: currentEndTime.toISOString(),
-                working_mode: workingModeValue || 'mode1'
-            };
-            unitSocket.send(JSON.stringify(params));
-        }
-    }
-    
-    // Connection timeout
-    const connectionTimeout = setTimeout(() => {
-        if (!hasReceivedInitialData) {
-            hasReceivedInitialData = true;
-            unitData[unitName] = { models: [], summary: null };
-            callback([]);
-        }
-    }, 10000);
-    
-    unitSocket.onopen = () => {
-        sendDataRequest();
-        updateInterval = setInterval(sendDataRequest, 30000); // Update every 30 seconds
-    };
-    
-    unitSocket.onmessage = (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            
-            if (data.error) {
-                console.error(`Error for "${unitName}":`, data.error);
-                if (!hasReceivedInitialData) {
-                    hasReceivedInitialData = true;
-                    clearTimeout(connectionTimeout);
-                    unitData[unitName] = { models: [], summary: null };
-                    callback([]);
-                }
-            } else {
-                // Check if data has the new structure with models and summary
-                if (data.models && data.summary) {
-                    // New structure: store both models and summary
-                    unitData[unitName] = {
-                        models: data.models.map(item => ({
-                            ...item,
-                            unit: unitName
-                        })),
-                        summary: data.summary
-                    };
-                } else {
-                    // Old structure: assume data is array of models (fallback)
-                    unitData[unitName] = {
-                        models: data.map(item => ({
-                            ...item,
-                            unit: unitName
-                        })),
-                        summary: null
-                    };
-                }
-                
-                if (!hasReceivedInitialData) {
-                    hasReceivedInitialData = true;
-                    clearTimeout(connectionTimeout);
-                    callback(data.models || data);
-                } else {
-                    // Show update indicator
-                    updateIndicator.classList.remove('hidden');
-                    
-                    // Update charts with new data
-                    updateCharts();
-                    updateLastUpdateTime();
-                    
-                    // Hide update indicator after a brief moment
-                    setTimeout(() => {
-                        updateIndicator.classList.add('hidden');
-                    }, 1000);
-                }
-            }
-        } catch (error) {
-            console.error(`Error parsing data for "${unitName}":`, error);
-            if (!hasReceivedInitialData) {
-                hasReceivedInitialData = true;
-                clearTimeout(connectionTimeout);
-                unitData[unitName] = { models: [], summary: null };
-                callback([]);
-            }
-        }
-    };
-    
-    unitSocket.onerror = (error) => {
-        console.error(`WebSocket error for "${unitName}":`, error);
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-        }
-        if (!hasReceivedInitialData) {
-            hasReceivedInitialData = true;
-            clearTimeout(connectionTimeout);
-            unitData[unitName] = { models: [], summary: null };
-            callback([]);
-        }
-    };
-    
-    unitSocket.onclose = (event) => {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-        }
-        if (!hasReceivedInitialData) {
-            hasReceivedInitialData = true;
-            clearTimeout(connectionTimeout);
-            unitData[unitName] = { models: [], summary: null };
-            callback([]);
-        }
-    };
+    fetch(url)
+        .then(response => {
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            return response.json();
+        })
+        .then(data => {
+            console.log(`[HISTORICAL REPORT] Received data for "${unitName}":`, data);
+            callback(data);
+        })
+        .catch(error => {
+            console.error(`[HISTORICAL REPORT] Error fetching data for "${unitName}":`, error);
+            callback(null);
+        });
 }
 
-// Calculate unit metrics
 function calculateUnitMetrics(unitName) {
     const unitDataObj = unitData[unitName];
     
@@ -484,22 +329,25 @@ function calculateUnitMetrics(unitName) {
         };
     }
     
-    // Check if we have backend-calculated summary (preferred)
     if (unitDataObj.summary) {
-        // Use backend summary values - check for new unit_performance_sum field
-        const performance = unitDataObj.summary.unit_performance_sum !== undefined ? 
-            unitDataObj.summary.unit_performance_sum : 
-            unitDataObj.summary.total_performance;
-            
         return {
             totalSuccess: unitDataObj.summary.total_success || 0,
             totalFail: unitDataObj.summary.total_fail || 0,
             quality: (unitDataObj.summary.total_quality || 0) * 100,
-            performance: (performance || 0) * 100
+            performance: (unitDataObj.summary.total_performance || 0) * 100
         };
     }
     
-    // Fallback: calculate from model data if no summary (shouldn't happen with new backend)
+    // Check if backend provided unit_performance_sum (new calculation)
+    if (unitDataObj.unit_performance_sum !== undefined) {
+        return {
+            totalSuccess: unitDataObj.total_success || 0,
+            totalFail: unitDataObj.total_fail || 0,
+            quality: (unitDataObj.total_quality || 0) * 100,
+            performance: (unitDataObj.unit_performance_sum || 0) * 100
+        };
+    }
+    
     const data = unitDataObj.models || unitDataObj || [];
     
     if (data.length === 0) {
@@ -511,7 +359,6 @@ function calculateUnitMetrics(unitName) {
         };
     }
     
-    // Calculate totals for this unit
     let totalSuccess = 0;
     let totalFail = 0;
     let totalQty = 0;
@@ -547,14 +394,11 @@ function calculateUnitMetrics(unitName) {
     };
 }
 
-// Create charts
 function createCharts() {
-    // Get sorted unit data based on current sort settings
     const sortedData = getSortedUnitData();
     const unitNames = sortedData.unitNames;
     const unitMetrics = sortedData.unitMetrics;
     
-    // Colors for different units
     const colors = [
         '#3B82F6', '#EF4444', '#10B981', '#F59E0B', 
         '#8B5CF6', '#06B6D4', '#F97316', '#84CC16'
@@ -580,16 +424,10 @@ function createCharts() {
             scales: {
                 y: {
                     beginAtZero: true,
-                    ticks: {
-                        stepSize: 1
-                    }
+                    ticks: { stepSize: 1 }
                 }
             },
-            plugins: {
-                legend: {
-                    display: false
-                }
-            }
+            plugins: { legend: { display: false } }
         }
     });
     
@@ -613,16 +451,10 @@ function createCharts() {
             scales: {
                 y: {
                     beginAtZero: true,
-                    ticks: {
-                        stepSize: 1
-                    }
+                    ticks: { stepSize: 1 }
                 }
             },
-            plugins: {
-                legend: {
-                    display: false
-                }
-            }
+            plugins: { legend: { display: false } }
         }
     });
     
@@ -654,11 +486,7 @@ function createCharts() {
                     }
                 }
             },
-            plugins: {
-                legend: {
-                    display: false
-                }
-            }
+            plugins: { legend: { display: false } }
         }
     });
     
@@ -689,53 +517,39 @@ function createCharts() {
                     }
                 }
             },
-            plugins: {
-                legend: {
-                    display: false
-                }
-            }
+            plugins: { legend: { display: false } }
         }
     });
     
-    // Update summary statistics
     updateSummaryStatistics(unitMetrics);
-    
-    // Update sort indicators after charts are created
     updateSortIndicators();
 }
 
-// Update charts with new data
 function updateCharts() {
     if (!totalSuccessChart) return;
     
-    // Get sorted unit data based on current sort settings
     const sortedData = getSortedUnitData();
     const unitNames = sortedData.unitNames;
     const unitMetrics = sortedData.unitMetrics;
     
-    // Update chart labels (unit names) with new sorted order
     totalSuccessChart.data.labels = unitNames;
     totalFailChart.data.labels = unitNames;
     qualityChart.data.labels = unitNames;
     performanceChart.data.labels = unitNames;
     
-    // Update chart data
     totalSuccessChart.data.datasets[0].data = unitMetrics.map(m => m.totalSuccess);
     totalFailChart.data.datasets[0].data = unitMetrics.map(m => m.totalFail);
     qualityChart.data.datasets[0].data = unitMetrics.map(m => m.quality);
     performanceChart.data.datasets[0].data = unitMetrics.map(m => m.performance);
     
-    // Update charts
     totalSuccessChart.update('none');
     totalFailChart.update('none');
     qualityChart.update('none');
     performanceChart.update('none');
     
-    // Update summary statistics
     updateSummaryStatistics(unitMetrics);
 }
 
-// Update summary statistics
 function updateSummaryStatistics(unitMetrics) {
     const totalSuccess = unitMetrics.reduce((sum, m) => sum + m.totalSuccess, 0);
     const totalFail = unitMetrics.reduce((sum, m) => sum + m.totalFail, 0);
@@ -767,36 +581,8 @@ function updateSummaryStatistics(unitMetrics) {
     
     const avgPerformance = totalSuccessWeight > 0 ? (weightedPerformanceSum / totalSuccessWeight) * 100 : 0;
     
-    // Check if values have changed and update individual elements
-    const totalSuccessElement = document.getElementById('total-success');
-    const oldTotalSuccess = totalSuccessElement.textContent;
-    const newTotalSuccess = totalSuccess.toLocaleString();
-    if (oldTotalSuccess !== newTotalSuccess) {
-        totalSuccessElement.textContent = newTotalSuccess;
-        elementsToFlashOnUpdate.push(totalSuccessElement);
-    }
-    
-    const totalFailElement = document.getElementById('total-fail');
-    const oldTotalFail = totalFailElement.textContent;
-    const newTotalFail = totalFail.toLocaleString();
-    if (oldTotalFail !== newTotalFail) {
-        totalFailElement.textContent = newTotalFail;
-        elementsToFlashOnUpdate.push(totalFailElement);
-    }
-    
-    const avgQualityElement = document.getElementById('avg-quality');
-    const oldAvgQuality = avgQualityElement.textContent;
-    const newAvgQuality = avgQuality.toFixed(0);
-    if (oldAvgQuality !== newAvgQuality) {
-        avgQualityElement.textContent = newAvgQuality;
-        elementsToFlashOnUpdate.push(avgQualityElement);
-    }
-    
-    const avgPerformanceElement = document.getElementById('avg-performance');
-    const oldAvgPerformance = avgPerformanceElement.textContent;
-    const newAvgPerformance = avgPerformance.toFixed(0);
-    if (oldAvgPerformance !== newAvgPerformance) {
-        avgPerformanceElement.textContent = newAvgPerformance;
-        elementsToFlashOnUpdate.push(avgPerformanceElement);
-    }
+    document.getElementById('total-success').textContent = totalSuccess.toLocaleString();
+    document.getElementById('total-fail').textContent = totalFail.toLocaleString();
+    document.getElementById('avg-quality').textContent = avgQuality.toFixed(0);
+    document.getElementById('avg-performance').textContent = avgPerformance.toFixed(0);
 } 

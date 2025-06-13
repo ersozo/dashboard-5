@@ -168,11 +168,6 @@ function isLiveDataRequest(startTime, endTime, selectedPreset) {
     
     const isLive = endTime >= fiveMinutesAgo;
     
-    console.log(`[ROUTING DECISION] End time: ${endTime.toISOString()}`);
-    console.log(`[ROUTING DECISION] Current time: ${now.toISOString()}`);
-    console.log(`[ROUTING DECISION] Time difference: ${Math.round((now.getTime() - endTime.getTime()) / 1000)}s`);
-    console.log(`[ROUTING DECISION] Is Live: ${isLive}`);
-    
     return isLive;
 }
 
@@ -233,6 +228,77 @@ function validateDataRetention(startTime, endTime) {
     return true;
 }
 
+// Function to group units by their base name (e.g., "Final 1", "Final 2")
+function groupUnitsByBase(units) {
+    const grouped = {};
+    
+    units.forEach(unit => {
+        // Extract base name (e.g., "Final 1" from "Final 1A", "Final 1B")
+        let baseName;
+        let side;
+        
+        // Handle special case for "Final 3A-2"
+        if (unit === 'Final 3A-2') {
+            baseName = 'Final 3';
+            side = 'A';
+        } else {
+            // Regular pattern: extract everything except the last character(s)
+            const match = unit.match(/^(.+?)([AB])$/);
+            if (match) {
+                baseName = match[1].trim();
+                side = match[2];
+            } else {
+                // If no A/B suffix, treat as standalone
+                baseName = unit;
+                side = 'A';
+            }
+        }
+        
+        if (!grouped[baseName]) {
+            grouped[baseName] = { A: [], B: [] };
+        }
+        
+        grouped[baseName][side].push(unit);
+    });
+    
+    return grouped;
+}
+
+// Function to create a unit checkbox element
+function createUnitCheckbox(unit) {
+    const unitElement = document.createElement('div');
+    unitElement.className = 'flex items-center px-2 py-2 hover:bg-gray-50 hover:rounded';
+    
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.name = 'units';
+    checkbox.id = `unit-${unit}`;
+    checkbox.value = unit;
+    checkbox.className = 'h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer flex-shrink-0';
+    checkbox.addEventListener('change', () => {
+        if (checkbox.checked) {
+            // Add to selected units if not already in the array
+            if (!selectedUnits.includes(unit)) {
+                selectedUnits.push(unit);
+            }
+        } else {
+            // Remove from selected units
+            selectedUnits = selectedUnits.filter(u => u !== unit);
+        }
+        console.log('Selected units:', selectedUnits);
+    });
+    
+    const label = document.createElement('label');
+    label.htmlFor = `unit-${unit}`;
+    label.className = 'ml-2 block text-sm text-gray-900 cursor-pointer';
+    label.textContent = unit;
+    
+    unitElement.appendChild(checkbox);
+    unitElement.appendChild(label);
+    
+    return unitElement;
+}
+
 // Fetch production units on page load
 document.addEventListener('DOMContentLoaded', () => {
     // Populate shifts for default working mode
@@ -280,39 +346,43 @@ async function fetchProductionUnits() {
         // Clear loading message
         unitsContainer.innerHTML = '';
         
-        // Add units as checkboxes in a 2-column layout
-        units.forEach(unit => {
-            const unitElement = document.createElement('div');
-            unitElement.className = 'flex items-center p-1 hover:bg-gray-50 hover:rounded';
+        // Group units by their base name (e.g., "Final 1", "Final 2", "Final 3")
+        const groupedUnits = groupUnitsByBase(units);
+        
+        // Add units as checkboxes in a smart 2-column layout with equal spacing
+        Object.entries(groupedUnits).forEach(([baseName, unitGroup]) => {
+            // Calculate the maximum number of units in either column for this group
+            const maxUnitsInGroup = Math.max(unitGroup.A.length, unitGroup.B.length);
             
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.name = 'units';
-            checkbox.id = `unit-${unit}`;
-            checkbox.value = unit;
-            checkbox.className = 'h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer';
-            checkbox.addEventListener('change', () => {
-                if (checkbox.checked) {
-                    // Add to selected units if not already in the array
-                    if (!selectedUnits.includes(unit)) {
-                        selectedUnits.push(unit);
-                    }
+            // Create individual rows for each unit position
+            for (let i = 0; i < maxUnitsInGroup; i++) {
+                const rowContainer = document.createElement('div');
+                rowContainer.className = 'col-span-2 grid grid-cols-2 gap-2 mb-2';
+                
+                // Create A column cell
+                const cellA = document.createElement('div');
+                if (unitGroup.A[i]) {
+                    const unitElement = createUnitCheckbox(unitGroup.A[i]);
+                    cellA.appendChild(unitElement);
                 } else {
-                    // Remove from selected units
-                    selectedUnits = selectedUnits.filter(u => u !== unit);
+                    // Empty cell to maintain grid structure
+                    cellA.innerHTML = '&nbsp;';
                 }
-                console.log('Selected units:', selectedUnits);
-            });
-            
-            const label = document.createElement('label');
-            label.htmlFor = `unit-${unit}`;
-            label.className = 'ml-2 block text-sm text-gray-900 py-1 cursor-pointer';
-            label.textContent = unit;
-            
-            unitElement.appendChild(checkbox);
-            unitElement.appendChild(label);
-            
-            unitsContainer.appendChild(unitElement);
+                
+                // Create B column cell
+                const cellB = document.createElement('div');
+                if (unitGroup.B[i]) {
+                    const unitElement = createUnitCheckbox(unitGroup.B[i]);
+                    cellB.appendChild(unitElement);
+                } else {
+                    // Empty cell to maintain grid structure
+                    cellB.innerHTML = '&nbsp;';
+                }
+                
+                rowContainer.appendChild(cellA);
+                rowContainer.appendChild(cellB);
+                unitsContainer.appendChild(rowContainer);
+            }
         });
         
         // Remove default selection of first unit
@@ -323,19 +393,19 @@ async function fetchProductionUnits() {
         
         // Add a default option if we can't load from the backend
         const unitElement = document.createElement('div');
-        unitElement.className = 'flex items-center p-1 hover:bg-gray-50 hover:rounded';
+        unitElement.className = 'flex items-center px-2 py-2 hover:bg-gray-50 hover:rounded';
         
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
         checkbox.name = 'units';
         checkbox.id = 'unit-DefaultUnit';
         checkbox.value = 'DefaultUnit';
-        checkbox.className = 'h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer';
+        checkbox.className = 'h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500 cursor-pointer flex-shrink-0';
         checkbox.checked = false; // Not checked by default
         
         const label = document.createElement('label');
         label.htmlFor = 'unit-DefaultUnit';
-        label.className = 'ml-2 block text-sm text-gray-900 py-1 cursor-pointer';
+        label.className = 'ml-2 block text-sm text-gray-900 cursor-pointer';
         label.textContent = 'Default Unit';
         
         unitElement.appendChild(checkbox);
@@ -572,6 +642,13 @@ reportViewBtn.addEventListener('click', () => {
         return;
     }
     
+    // Get selected preset
+    const selectedPreset = document.querySelector('input[name="time-preset"]:checked');
+    const presetValue = selectedPreset ? selectedPreset.value : null;
+    
+    // Determine if this should be live or historical data
+    const isLive = isLiveDataRequest(startTime, endTime, presetValue);
+    
     // Create URL parameters
     const params = new URLSearchParams();
     
@@ -591,13 +668,15 @@ reportViewBtn.addEventListener('click', () => {
     }
     
     // Add preset if available
-    const selectedPreset = document.querySelector('input[name="time-preset"]:checked');
-    if (selectedPreset && selectedPreset.value) {
-        params.append('preset', selectedPreset.value);
+    if (presetValue) {
+        params.append('preset', presetValue);
     }
     
+    // Choose the appropriate page based on live vs historical
+    const pageUrl = isLive ? '/report' : '/report-historical';
+    
     // Open in new window with explicit _blank target to ensure it always opens in a new window
-    const newWindow = window.open(`/report?${params.toString()}`, '_blank');
+    const newWindow = window.open(`${pageUrl}?${params.toString()}`, '_blank');
     if (newWindow) {
         // If successful, focus the new window
         newWindow.focus();
