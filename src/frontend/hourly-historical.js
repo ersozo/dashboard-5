@@ -142,147 +142,44 @@ function formatTimeOnly(date) {
 
 // Load historical hourly data for all units (no updates)
 function loadHistoricalHourlyData() {
-    // Show loading indicator
     loadingIndicator.classList.remove('hidden');
-
-    // Clear hourly data container
     hourlyDataContainer.innerHTML = '';
-
-    // Set the grid layout based on number of units
     if (selectedUnits.length === 1) {
-        // One unit - single column layout
         hourlyDataContainer.className = 'grid grid-cols-1 gap-4 w-full';
     } else {
-        // Multiple units - two column layout
         hourlyDataContainer.className = 'grid grid-cols-1 md:grid-cols-2 gap-4 w-full';
     }
-
-    // Create connections for each selected unit (historical - single request only)
     let completedRequests = 0;
-
     selectedUnits.forEach(unit => {
-        // Connect to WebSocket for historical hourly data (single request)
-        connectHistoricalHourlyWebSocket(unit, startTime, endTime, (data) => {
-            // Process data for this unit
+        fetchHistoricalHourlyData(unit, startTime, endTime, (data) => {
             createHourlyDataDisplay(unit, data);
-
-            // Track completed requests for initial loading
             completedRequests++;
-
-            // When all initial requests are done, hide loading
             if (completedRequests === selectedUnits.length) {
-                // Hide loading indicator
                 loadingIndicator.classList.add('hidden');
             }
         });
     });
 }
 
-// Connect to WebSocket for historical hourly data (single request, no updates)
-function connectHistoricalHourlyWebSocket(unitName, startTime, endTime, callback) {
-    // Determine WebSocket URL
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/hourly/${unitName}`;
-
-    console.log(`[HISTORICAL] Connecting to hourly WebSocket for "${unitName}" at ${wsUrl}`);
-
-    // Create a new WebSocket for this unit
-    const unitSocket = new WebSocket(wsUrl);
-
-    let hasReceivedData = false;
-
-    // Set a timeout to ensure we get a callback even if WebSocket fails to connect
-    const connectionTimeout = setTimeout(() => {
-        if (!hasReceivedData) {
-            console.warn(`[HISTORICAL] Connection timeout for hourly data "${unitName}". Completing with empty data.`);
-            hasReceivedData = true;
+// Fetch historical hourly data using HTTP endpoint
+function fetchHistoricalHourlyData(unitName, startTime, endTime, callback) {
+    const url = new URL(`/historical-hourly-data/${encodeURIComponent(unitName)}`, window.location.origin);
+    url.searchParams.append('start_time', startTime.toISOString());
+    url.searchParams.append('end_time', endTime.toISOString());
+    url.searchParams.append('working_mode', workingModeValue || 'mode1');
+    fetch(url)
+        .then(response => {
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            return response.json();
+        })
+        .then(data => {
+            console.log(`[HISTORICAL] Received hourly data for "${unitName}":`, data);
+            callback(data);
+        })
+        .catch(error => {
+            console.error(`[HISTORICAL] Error fetching hourly data for "${unitName}":`, error);
             callback(null);
-        }
-    }, 15000); // 15 second timeout for hourly data
-
-    unitSocket.onopen = () => {
-        console.log(`[HISTORICAL] Hourly WebSocket connection established for "${unitName}"`);
-
-        // Send historical data request (no updates)
-        const params = {
-            start_time: startTime.toISOString(),
-            end_time: endTime.toISOString(),
-            working_mode: workingModeValue || 'mode1'
-        };
-
-        console.log(`[HISTORICAL] Requesting historical data for "${unitName}":`, {
-            start: params.start_time,
-            end: params.end_time,
-            working_mode: params.working_mode
         });
-
-        unitSocket.send(JSON.stringify(params));
-    };
-
-    unitSocket.onmessage = (event) => {
-        try {
-            console.log(`[HISTORICAL] Received hourly data message for "${unitName}" (length: ${event.data.length})`);
-
-            // Validate raw data first
-            if (!event.data) {
-                console.error(`[HISTORICAL] Empty data received for "${unitName}"`);
-                if (!hasReceivedData) {
-                    hasReceivedData = true;
-                    clearTimeout(connectionTimeout);
-                    callback(null);
-                }
-                return;
-            }
-
-            // Try to parse the data
-            const data = JSON.parse(event.data);
-
-            // Check if response contains an error
-            if (data.error) {
-                console.error(`[HISTORICAL] Error for hourly data "${unitName}":`, data.error);
-
-                if (!hasReceivedData) {
-                    hasReceivedData = true;
-                    clearTimeout(connectionTimeout);
-                    callback(null);
-                }
-            } else {
-                console.log(`[HISTORICAL] Processed hourly data for "${unitName}": ${data.hourly_data ? data.hourly_data.length : 0} hour records`);
-
-                if (!hasReceivedData) {
-                    hasReceivedData = true;
-                    clearTimeout(connectionTimeout);
-                    callback(data);
-                }
-
-                // Close the WebSocket after receiving data (no updates needed for historical)
-                unitSocket.close();
-            }
-        } catch (error) {
-            console.error(`[HISTORICAL] Error parsing hourly data for "${unitName}":`, error);
-            console.error(`[HISTORICAL] Raw data received: ${event.data.substring(0, 100)}...`);
-
-            if (!hasReceivedData) {
-                hasReceivedData = true;
-                clearTimeout(connectionTimeout);
-                callback(null);
-            }
-        }
-    };
-
-    unitSocket.onerror = (error) => {
-        console.error(`[HISTORICAL] Hourly WebSocket error for ${unitName}:`, error);
-        callback(null);
-    };
-
-    unitSocket.onclose = (event) => {
-        console.log(`[HISTORICAL] Hourly WebSocket closed for ${unitName}:`, event);
-
-        if (!event.wasClean && !hasReceivedData) {
-            console.error(`[HISTORICAL] Failed to get historical data for ${unitName}`);
-            callback(null);
-        }
-    };
 }
 
 // Create hourly data display for a unit (historical - no updates)

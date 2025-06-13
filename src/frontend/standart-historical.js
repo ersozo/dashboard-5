@@ -127,15 +127,12 @@ function loadHistoricalData() {
     const totalRequests = selectedUnits.length;
     
     selectedUnits.forEach(unitName => {
-        connectHistoricalWebSocket(unitName, startTime, endTime, (data) => {
+        fetchHistoricalData(unitName, startTime, endTime, (data) => {
             if (data) {
-                // Handle both data structures: { models: [], summary: {} } or direct array
                 if (data.models && Array.isArray(data.models)) {
-                    // New structure with models and summary
                     unitData[unitName] = data.models;
                     console.log(`[HISTORICAL] Received data for "${unitName}": ${data.models.length} records`);
                 } else if (Array.isArray(data)) {
-                    // Old structure - direct array
                     unitData[unitName] = data;
                     console.log(`[HISTORICAL] Received data for "${unitName}": ${data.length} records`);
                 } else {
@@ -146,10 +143,7 @@ function loadHistoricalData() {
                 console.log(`[HISTORICAL] No data received for "${unitName}"`);
                 unitData[unitName] = [];
             }
-            
             completedRequests++;
-            
-            // When all requests are complete, update UI
             if (completedRequests === totalRequests) {
                 console.log('[HISTORICAL] All data loaded, updating UI');
                 updateUI();
@@ -159,86 +153,22 @@ function loadHistoricalData() {
     });
 }
 
-// Connect to WebSocket for historical data (single request)
-function connectHistoricalWebSocket(unitName, startTime, endTime, callback) {
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/${unitName}`;
-    
-    console.log(`[HISTORICAL] Connecting to WebSocket for "${unitName}" at ${wsUrl}`);
-    
-    const socket = new WebSocket(wsUrl);
-    let hasReceivedData = false;
-    
-    // Set a timeout for connection
-    const connectionTimeout = setTimeout(() => {
-        if (!hasReceivedData) {
-            console.warn(`[HISTORICAL] Connection timeout for "${unitName}"`);
-            hasReceivedData = true;
+// Fetch historical data using HTTP endpoint
+function fetchHistoricalData(unitName, startTime, endTime, callback) {
+    const url = new URL(`/historical-data/${encodeURIComponent(unitName)}`, window.location.origin);
+    url.searchParams.append('start_time', startTime.toISOString());
+    url.searchParams.append('end_time', endTime.toISOString());
+    url.searchParams.append('working_mode', workingModeValue || 'mode1');
+    fetch(url)
+        .then(response => {
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            return response.json();
+        })
+        .then(data => callback(data))
+        .catch(error => {
+            console.error(`[HISTORICAL] Error fetching data for "${unitName}":`, error);
             callback(null);
-        }
-    }, 10000);
-    
-    socket.onopen = () => {
-        console.log(`[HISTORICAL] WebSocket connection established for "${unitName}"`);
-        
-        // Send historical data request
-        const params = {
-            start_time: startTime.toISOString(),
-            end_time: endTime.toISOString(),
-            working_mode: workingModeValue || 'mode1'
-        };
-        
-        console.log(`[HISTORICAL] Requesting data for "${unitName}":`, params);
-        socket.send(JSON.stringify(params));
-    };
-    
-    socket.onmessage = (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            
-            if (!hasReceivedData) {
-                hasReceivedData = true;
-                clearTimeout(connectionTimeout);
-                
-                if (data.error) {
-                    console.error(`[HISTORICAL] Error for "${unitName}":`, data.error);
-                    callback(null);
-                } else {
-                    console.log(`[HISTORICAL] Received data for "${unitName}"`, data);
-                    callback(data);
-                }
-                
-                // Close the socket after receiving data
-                socket.close();
-            }
-        } catch (error) {
-            console.error(`[HISTORICAL] Error parsing data for "${unitName}":`, error);
-            
-            if (!hasReceivedData) {
-                hasReceivedData = true;
-                clearTimeout(connectionTimeout);
-                callback(null);
-            }
-        }
-    };
-    
-    socket.onerror = (error) => {
-        console.error(`[HISTORICAL] WebSocket error for "${unitName}":`, error);
-        if (!hasReceivedData) {
-            hasReceivedData = true;
-            clearTimeout(connectionTimeout);
-            callback(null);
-        }
-    };
-    
-    socket.onclose = (event) => {
-        console.log(`[HISTORICAL] WebSocket closed for "${unitName}":`, event);
-        if (!event.wasClean && !hasReceivedData) {
-            hasReceivedData = true;
-            clearTimeout(connectionTimeout);
-            callback(null);
-        }
-    };
+        });
 }
 
 // Update UI with historical data
