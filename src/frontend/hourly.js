@@ -943,7 +943,7 @@ function updateTableBody(tableBody, hourlyData) {
 function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
     // Determine WebSocket URL
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/hourly/${unitName}`;
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws/hourly/${encodeURIComponent(unitName)}`;
 
     console.log(`Connecting to hourly WebSocket for "${unitName}" at ${wsUrl}`);
 

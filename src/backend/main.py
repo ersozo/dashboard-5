@@ -122,6 +122,7 @@ async def get_debug():
     else:
         raise HTTPException(status_code=404, detail=f"Debug file not found at {debug_file_path}")
 
+
 # Shift change test route
 @app.get("/test-shifts")
 async def get_test_shifts():
@@ -731,127 +732,66 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 else:
                     print("No models with target found")
                 
-                # Now process hourly data using the raw data
+                # Process hourly data hour by hour (same approach as historical hourly endpoint)
                 hourly_data = []
+                current_hour = start_time.replace(minute=0, second=0, microsecond=0)
                 
-                # Initialize hourly containers for the entire time range
-                container_start_time = start_time
-                container_end_time = end_time
-                
-                # Detect if this is historical data or live data
-                if current_time:
-                    time_difference = current_time - end_time
-                    five_minutes = timedelta(minutes=5)
+                while current_hour < end_time:
+                    hour_end = min(current_hour + timedelta(hours=1), end_time)
                     
-                    # Only use current_time for live data (end_time is within 5 minutes of current_time)
-                    if time_difference <= five_minutes:
-                        # This is live data - use current_time as end_time
-                        container_end_time = current_time
-                    else:
-                        # This is historical data - use the original end_time
-                        container_end_time = end_time
-                
-                current_hour = container_start_time.replace(minute=0, second=0, microsecond=0)
-                hour_containers = {}
-                
-                while current_hour < container_end_time:
-                    hour_end = min(current_hour + timedelta(hours=1), container_end_time)
+                    # Get data for this specific hour
+                    hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
                     
-                    # Store both the full ISO format and the naive format for easier matching
-                    hour_key = current_hour.isoformat()
+                    # Calculate hourly totals
+                    hour_success = sum(model['success_qty'] for model in hour_data)
+                    hour_fail = sum(model['fail_qty'] for model in hour_data)
+                    hour_total = sum(model['total_qty'] for model in hour_data)
                     
-                    # Initialize hour container
-                    hour_containers[hour_key] = {
-                        'hour_start': current_hour,
-                        'hour_end': hour_end,
-                        'success_qty': 0,
-                        'fail_qty': 0,
-                        'total_qty': 0,
-                        'is_current': current_hour <= current_time < hour_end if current_time else False
-                    }
+                    # Calculate hourly quality
+                    hour_quality = hour_success / (hour_success + hour_fail) if (hour_success + hour_fail) > 0 else 0
                     
-                    # Move to next hour
-                    current_hour += timedelta(hours=1)
-                
-                # Group records by hour
-                for record in raw_data:
-                    timestamp = datetime.fromisoformat(record['timestamp'])
-                    record_hour = timestamp.replace(minute=0, second=0, microsecond=0)
+                    # Calculate hourly performance and theoretical quantity
+                    models_with_target = [model for model in hour_data if model['target'] is not None]
+                    hour_performance = 0
+                    hour_theoretical_qty = 0
                     
-                    # Ensure record_hour has same timezone as the containers
-                    if record_hour.tzinfo is None and start_time.tzinfo is not None:
-                        record_hour = TIMEZONE.localize(record_hour)
-                    elif record_hour.tzinfo is not None and record_hour.tzinfo != start_time.tzinfo:
-                        record_hour = record_hour.astimezone(start_time.tzinfo)
-                    
-                    hour_key = record_hour.isoformat()
-                    
-                    # Skip if hour is outside our range
-                    if hour_key not in hour_containers:
-                        continue
-                    
-                    # Update hour container totals
-                    if record['success_qty'] > 0:
-                        hour_containers[hour_key]['success_qty'] += record['success_qty']
-                        hour_containers[hour_key]['total_qty'] += record['success_qty']
-                    if record['fail_qty'] > 0:
-                        hour_containers[hour_key]['fail_qty'] += record['fail_qty']
-                
-                # Calculate metrics for each hour
-                total_theoretical_qty_corrected = 0
-                for hour_key, container in hour_containers.items():
-                    hour_start = container['hour_start']
-                    hour_end = container['hour_end']
-                    is_current = container['is_current']
-                    
-                    # Create hour summary structure
-                    hour_summary = {
-                        'hour_start': hour_start.isoformat(),
-                        'hour_end': hour_end.isoformat(),
-                        'success_qty': container['success_qty'],
-                        'fail_qty': container['fail_qty'],
-                        'total_qty': container['total_qty'],
-                        'quality': 0,
-                        'performance': 0,
-                        'oee': 0,
-                        'theoretical_qty': 0
-                    }
-                    
-                    # Calculate quality
-                    if hour_summary['total_qty'] > 0:
-                        hour_summary['quality'] = hour_summary['success_qty'] / hour_summary['total_qty']
-                    
-                    # Calculate performance and theoretical quantity for this hour
-                    if hour_summary['total_qty'] > 0:
-                        # Set operation time based on whether this is the current hour
-                        if is_current:
-                            operation_time_total = (current_time - hour_start).total_seconds()
-                        else:
-                            operation_time_total = (hour_end - hour_start).total_seconds()
-                        
-                        # Calculate and subtract break time for this hour
-                        hour_end_time = current_time if is_current else hour_end
-                        break_time = calculate_break_time(hour_start, hour_end_time, working_mode)
-                        operation_time = operation_time_total - break_time
-                        
-                        # Ensure operation time is not negative
-                        operation_time = max(operation_time, 0)
+                    if models_with_target:
+                        # Calculate operation time for this hour
+                        hour_operation_time = (hour_end - current_hour).total_seconds()
+                        hour_break_time = calculate_break_time(current_hour, hour_end, working_mode)
+                        hour_operation_time = max(hour_operation_time - hour_break_time, 0)
                         
                         # Calculate theoretical quantity using weighted average target rate
-                        if total_actual_qty > 0:
-                            hour_theoretical_qty = (operation_time / 3600) * weighted_target_rate
-                            hour_summary['theoretical_qty'] = hour_theoretical_qty
-                            total_theoretical_qty_corrected += hour_theoretical_qty
+                        hour_actual_qty = sum(model['total_qty'] for model in models_with_target)
+                        
+                        if hour_actual_qty > 0:
+                            weighted_target_rate = 0
+                            for model in models_with_target:
+                                weight = model['total_qty'] / hour_actual_qty
+                                weighted_target_rate += model['target'] * weight
+                            
+                            # Calculate theoretical quantity using weighted average rate
+                            hour_theoretical_qty = (hour_operation_time / 3600) * weighted_target_rate
                             
                             # Calculate performance
-                            if hour_theoretical_qty > 0:
-                                hour_summary['performance'] = hour_summary['total_qty'] / hour_theoretical_qty
+                            hour_performance = hour_actual_qty / hour_theoretical_qty if hour_theoretical_qty > 0 else 0
                     
-                    # Add hour to final data
-                    hourly_data.append(hour_summary)
+                    hourly_data.append({
+                        'hour_start': current_hour.isoformat(),
+                        'hour_end': hour_end.isoformat(),
+                        'success_qty': hour_success,
+                        'fail_qty': hour_fail,
+                        'total_qty': hour_total,
+                        'quality': hour_quality,
+                        'performance': hour_performance,
+                        'oee': 0,  # OEE set to 0 as per requirements
+                        'theoretical_qty': hour_theoretical_qty
+                    })
+                    
+                    current_hour = hour_end
                 
-                # Use the corrected total theoretical quantity (sum of hourly calculations)
-                total_theoretical_qty = total_theoretical_qty_corrected
+                # Calculate corrected total theoretical quantity (sum of hourly calculations)
+                total_theoretical_qty = sum(hour['theoretical_qty'] for hour in hourly_data)
                 
                 # Finalize the response data
                 response_data = {
@@ -891,10 +831,14 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 except Exception as e:
                     break
             except Exception as e:
+                print(f"[HOURLY WEBSOCKET] Error in hourly WebSocket handler for {unit_name}: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 try:
-                    error_response = {"error": "An unexpected error occurred"}
+                    error_response = {"error": f"An unexpected error occurred: {str(e)}"}
                     await websocket.send_json(error_response)
                 except Exception as send_err:
+                    print(f"[HOURLY WEBSOCKET] Failed to send error response: {str(send_err)}")
                     break
     except Exception as e:
         print(f"Outer exception in hourly WebSocket handler: {e}")

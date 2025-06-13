@@ -842,7 +842,7 @@ function createUnitTables(unitDataMap) {
 function connectWebSocket(unitName, startTime, endTime, callback) {
     // Determine WebSocket URL
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/${unitName}`;
+    const wsUrl = `${wsProtocol}//${window.location.host}/ws/${encodeURIComponent(unitName)}`;
     
     // Create a new WebSocket for this unit
     const unitSocket = new WebSocket(wsUrl);
