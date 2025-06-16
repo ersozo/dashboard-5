@@ -310,6 +310,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Fetch available units
     fetchProductionUnits();
     
+    // Add event listeners for select all/deselect all buttons
+    setupSelectAllButtons();
+    
     // Add event listeners to working mode radio buttons
     document.querySelectorAll('input[name="working-mode"]').forEach(radio => {
         radio.addEventListener('change', (event) => {
@@ -332,6 +335,69 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }, 1000); // Check every second
 });
+
+// Setup event listeners for select all and deselect all buttons
+function setupSelectAllButtons() {
+    const selectAllBtn = document.getElementById('select-all-units');
+    const deselectAllBtn = document.getElementById('deselect-all-units');
+    
+    if (selectAllBtn) {
+        selectAllBtn.addEventListener('click', () => {
+            selectAllUnits();
+        });
+    }
+    
+    if (deselectAllBtn) {
+        deselectAllBtn.addEventListener('click', () => {
+            deselectAllUnits();
+        });
+    }
+}
+
+// Function to select all units
+function selectAllUnits() {
+    const unitCheckboxes = document.querySelectorAll('input[name="units"]');
+    selectedUnits = []; // Clear the array first
+    
+    unitCheckboxes.forEach(checkbox => {
+        checkbox.checked = true;
+        if (!selectedUnits.includes(checkbox.value)) {
+            selectedUnits.push(checkbox.value);
+        }
+    });
+    
+    console.log('All units selected:', selectedUnits);
+    
+    // Visual feedback
+    const selectAllBtn = document.getElementById('select-all-units');
+    if (selectAllBtn) {
+        selectAllBtn.classList.add('bg-blue-200');
+        setTimeout(() => {
+            selectAllBtn.classList.remove('bg-blue-200');
+        }, 200);
+    }
+}
+
+// Function to deselect all units
+function deselectAllUnits() {
+    const unitCheckboxes = document.querySelectorAll('input[name="units"]');
+    selectedUnits = []; // Clear the selected units array
+    
+    unitCheckboxes.forEach(checkbox => {
+        checkbox.checked = false;
+    });
+    
+    console.log('All units deselected:', selectedUnits);
+    
+    // Visual feedback
+    const deselectAllBtn = document.getElementById('deselect-all-units');
+    if (deselectAllBtn) {
+        deselectAllBtn.classList.add('bg-gray-200');
+        setTimeout(() => {
+            deselectAllBtn.classList.remove('bg-gray-200');
+        }, 200);
+    }
+}
 
 // Fetch production units from API
 async function fetchProductionUnits() {

@@ -18,6 +18,20 @@ let unitData = {};
 let currentSortMetric = 'totalSuccess';
 let currentSortOrder = 'desc';
 
+// Quality chart drill-down state
+let qualityChartDrilldownState = {
+    isInDrilldown: false,
+    selectedUnit: null,
+    originalData: null
+};
+
+// Fail chart drill-down state
+let failChartDrilldownState = {
+    isInDrilldown: false,
+    selectedUnit: null,
+    originalData: null
+};
+
 // UI elements
 let loadingIndicator;
 let chartsContainer;
@@ -454,7 +468,17 @@ function createCharts() {
                     ticks: { stepSize: 1 }
                 }
             },
-            plugins: { legend: { display: false } }
+            plugins: { legend: { display: false } },
+            onClick: (event, elements) => {
+                if (elements.length > 0) {
+                    const elementIndex = elements[0].index;
+                    if (!failChartDrilldownState.isInDrilldown) {
+                        // Drill down to unit models - get current unit name from chart labels
+                        const unitName = totalFailChart.data.labels[elementIndex];
+                        drillDownToUnitModelsFail(unitName);
+                    }
+                }
+            }
         }
     });
     
@@ -486,7 +510,17 @@ function createCharts() {
                     }
                 }
             },
-            plugins: { legend: { display: false } }
+            plugins: { legend: { display: false } },
+            onClick: (event, elements) => {
+                if (elements.length > 0) {
+                    const elementIndex = elements[0].index;
+                    if (!qualityChartDrilldownState.isInDrilldown) {
+                        // Drill down to unit models - get current unit name from chart labels
+                        const unitName = qualityChart.data.labels[elementIndex];
+                        drillDownToUnitModels(unitName);
+                    }
+                }
+            }
         }
     });
     
@@ -533,18 +567,47 @@ function updateCharts() {
     const unitMetrics = sortedData.unitMetrics;
     
     totalSuccessChart.data.labels = unitNames;
-    totalFailChart.data.labels = unitNames;
-    qualityChart.data.labels = unitNames;
+    
+    // Only update fail chart if not in drill-down mode
+    if (!failChartDrilldownState.isInDrilldown) {
+        totalFailChart.data.labels = unitNames;
+        totalFailChart.data.datasets[0].data = unitMetrics.map(m => m.totalFail);
+    }
+    
+    // Only update quality chart if not in drill-down mode
+    if (!qualityChartDrilldownState.isInDrilldown) {
+        qualityChart.data.labels = unitNames;
+        qualityChart.data.datasets[0].data = unitMetrics.map(m => m.quality);
+    }
+    
     performanceChart.data.labels = unitNames;
     
     totalSuccessChart.data.datasets[0].data = unitMetrics.map(m => m.totalSuccess);
-    totalFailChart.data.datasets[0].data = unitMetrics.map(m => m.totalFail);
-    qualityChart.data.datasets[0].data = unitMetrics.map(m => m.quality);
+    
+    // Only update fail data if not in drill-down mode
+    if (!failChartDrilldownState.isInDrilldown) {
+        totalFailChart.data.datasets[0].data = unitMetrics.map(m => m.totalFail);
+    }
+    
+    // Only update quality data if not in drill-down mode
+    if (!qualityChartDrilldownState.isInDrilldown) {
+        qualityChart.data.datasets[0].data = unitMetrics.map(m => m.quality);
+    }
+    
     performanceChart.data.datasets[0].data = unitMetrics.map(m => m.performance);
     
     totalSuccessChart.update('none');
-    totalFailChart.update('none');
-    qualityChart.update('none');
+    
+    // Only update fail chart if not in drill-down mode
+    if (!failChartDrilldownState.isInDrilldown) {
+        totalFailChart.update('none');
+    }
+    
+    // Only update quality chart if not in drill-down mode
+    if (!qualityChartDrilldownState.isInDrilldown) {
+        qualityChart.update('none');
+    }
+    
     performanceChart.update('none');
     
     updateSummaryStatistics(unitMetrics);
@@ -585,4 +648,256 @@ function updateSummaryStatistics(unitMetrics) {
     document.getElementById('total-fail').textContent = totalFail.toLocaleString();
     document.getElementById('avg-quality').textContent = avgQuality.toFixed(0);
     document.getElementById('avg-performance').textContent = avgPerformance.toFixed(0);
+}
+
+// Drill down to show model-level quality data for a specific unit
+function drillDownToUnitModels(unitName) {
+    const unitDataObj = unitData[unitName];
+    if (!unitDataObj) return;
+
+    // Store original data for returning back
+    qualityChartDrilldownState.originalData = {
+        labels: qualityChart.data.labels.slice(),
+        data: qualityChart.data.datasets[0].data.slice(),
+        backgroundColor: qualityChart.data.datasets[0].backgroundColor.slice(),
+        borderColor: qualityChart.data.datasets[0].borderColor.slice(),
+        title: 'Kalite (%)'
+    };
+    
+    qualityChartDrilldownState.isInDrilldown = true;
+    qualityChartDrilldownState.selectedUnit = unitName;
+
+    // Get model data - handle both new structure (with models array) and old structure
+    let models = [];
+    if (unitDataObj.models && Array.isArray(unitDataObj.models)) {
+        models = unitDataObj.models;
+    } else if (Array.isArray(unitDataObj)) {
+        models = unitDataObj;
+    }
+    
+    if (models.length === 0) {
+        console.log('[HISTORICAL REPORT] No model data available for unit:', unitName);
+        return;
+    }
+
+    // Calculate quality for each model
+    const modelData = models.map(model => {
+        const totalProduced = (model.success_qty || 0) + (model.fail_qty || 0);
+        const quality = totalProduced > 0 ? ((model.success_qty || 0) / totalProduced) * 100 : 0;
+        return {
+            name: model.model || 'Unknown Model',
+            quality: quality
+        };
+    });
+
+    // Sort models by quality descending
+    modelData.sort((a, b) => b.quality - a.quality);
+
+    // Colors for models
+    const modelColors = [
+        '#3B82F6', '#EF4444', '#10B981', '#F59E0B', 
+        '#8B5CF6', '#06B6D4', '#F97316', '#84CC16',
+        '#6366F1', '#EC4899', '#14B8A6', '#F59E0B'
+    ];
+
+    // Update quality chart with model data
+    qualityChart.data.labels = modelData.map(m => m.name);
+    qualityChart.data.datasets[0].data = modelData.map(m => m.quality);
+    qualityChart.data.datasets[0].backgroundColor = modelColors.slice(0, modelData.length);
+    qualityChart.data.datasets[0].borderColor = modelColors.slice(0, modelData.length);
+    qualityChart.data.datasets[0].label = `${unitName} - Model Kalite (%)`;
+    
+    qualityChart.update('active');
+
+    // Update chart title and add back button
+    updateQualityChartTitle(`${unitName} - Model Kalite Detayı`, true);
+}
+
+// Return to unit-level view
+function returnToUnitView() {
+    if (!qualityChartDrilldownState.isInDrilldown || !qualityChartDrilldownState.originalData) return;
+
+    // Restore original data
+    const originalData = qualityChartDrilldownState.originalData;
+    qualityChart.data.labels = originalData.labels;
+    qualityChart.data.datasets[0].data = originalData.data;
+    qualityChart.data.datasets[0].backgroundColor = originalData.backgroundColor;
+    qualityChart.data.datasets[0].borderColor = originalData.borderColor;
+    qualityChart.data.datasets[0].label = 'Kalite (%)';
+    
+    qualityChart.update('active');
+
+    // Reset drill-down state
+    qualityChartDrilldownState.isInDrilldown = false;
+    qualityChartDrilldownState.selectedUnit = null;
+    qualityChartDrilldownState.originalData = null;
+
+    // Update chart title and remove back button
+    updateQualityChartTitle('Kalite (%)', false);
+}
+
+// Update quality chart title and back button
+function updateQualityChartTitle(title, showBackButton) {
+    const qualityChartContainer = document.querySelector('#qualityChart').closest('.bg-white');
+    if (!qualityChartContainer) return;
+
+    let titleElement = qualityChartContainer.querySelector('h3');
+    if (!titleElement) return;
+
+    // Remove existing back button if any
+    const existingBackButton = qualityChartContainer.querySelector('.quality-back-button');
+    if (existingBackButton) {
+        existingBackButton.remove();
+    }
+
+    // Update title
+    titleElement.textContent = title;
+
+    // Add back button if needed
+    if (showBackButton) {
+        const backButton = document.createElement('button');
+        backButton.className = 'quality-back-button ml-2 px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors';
+        backButton.textContent = '← Geri';
+        backButton.style.fontSize = '12px';
+        backButton.onclick = returnToUnitView;
+        
+        // Create a flex container for title and button
+        const headerContainer = document.createElement('div');
+        headerContainer.className = 'flex items-center justify-between mb-4';
+        
+        const titleContainer = document.createElement('div');
+        titleContainer.className = 'flex items-center';
+        titleContainer.appendChild(titleElement.cloneNode(true));
+        titleContainer.appendChild(backButton);
+        
+        headerContainer.appendChild(titleContainer);
+        
+        // Replace the original title
+        titleElement.parentNode.replaceChild(headerContainer, titleElement);
+    }
+}
+
+// Drill down to show model-level fail data for a specific unit
+function drillDownToUnitModelsFail(unitName) {
+    const unitDataObj = unitData[unitName];
+    if (!unitDataObj) return;
+
+    // Store original data for returning back
+    failChartDrilldownState.originalData = {
+        labels: totalFailChart.data.labels.slice(),
+        data: totalFailChart.data.datasets[0].data.slice(),
+        backgroundColor: totalFailChart.data.datasets[0].backgroundColor.slice(),
+        borderColor: totalFailChart.data.datasets[0].borderColor.slice(),
+        title: 'Toplam Tamir'
+    };
+    
+    failChartDrilldownState.isInDrilldown = true;
+    failChartDrilldownState.selectedUnit = unitName;
+
+    // Get model data - handle both new structure (with models array) and old structure
+    let models = [];
+    if (unitDataObj.models && Array.isArray(unitDataObj.models)) {
+        models = unitDataObj.models;
+    } else if (Array.isArray(unitDataObj)) {
+        models = unitDataObj;
+    }
+    
+    if (models.length === 0) {
+        console.log('[HISTORICAL REPORT] No model data available for unit:', unitName);
+        return;
+    }
+
+    // Calculate fail quantities for each model
+    const modelData = models.map(model => {
+        return {
+            name: model.model || 'Unknown Model',
+            failQty: model.fail_qty || 0
+        };
+    });
+
+    // Sort models by fail quantity descending
+    modelData.sort((a, b) => b.failQty - a.failQty);
+
+    // Colors for models (red theme for fails)
+    const modelColors = [
+        '#EF4444', '#DC2626', '#B91C1C', '#991B1B', 
+        '#7F1D1D', '#F87171', '#FCA5A5', '#FECACA',
+        '#FEE2E2', '#FEF2F2', '#F59E0B', '#F97316'
+    ];
+
+    // Update fail chart with model data
+    totalFailChart.data.labels = modelData.map(m => m.name);
+    totalFailChart.data.datasets[0].data = modelData.map(m => m.failQty);
+    totalFailChart.data.datasets[0].backgroundColor = modelColors.slice(0, modelData.length);
+    totalFailChart.data.datasets[0].borderColor = modelColors.slice(0, modelData.length);
+    totalFailChart.data.datasets[0].label = `${unitName} - Model Tamir`;
+    
+    totalFailChart.update('active');
+
+    // Update chart title and add back button
+    updateFailChartTitle(`${unitName} - Model Tamir Detayı`, true);
+}
+
+// Return to unit-level view for fail chart
+function returnToUnitViewFail() {
+    if (!failChartDrilldownState.isInDrilldown || !failChartDrilldownState.originalData) return;
+
+    // Restore original data
+    const originalData = failChartDrilldownState.originalData;
+    totalFailChart.data.labels = originalData.labels;
+    totalFailChart.data.datasets[0].data = originalData.data;
+    totalFailChart.data.datasets[0].backgroundColor = originalData.backgroundColor;
+    totalFailChart.data.datasets[0].borderColor = originalData.borderColor;
+    totalFailChart.data.datasets[0].label = 'Toplam Tamir';
+    
+    totalFailChart.update('active');
+
+    // Reset drill-down state
+    failChartDrilldownState.isInDrilldown = false;
+    failChartDrilldownState.selectedUnit = null;
+    failChartDrilldownState.originalData = null;
+
+    // Update chart title and remove back button
+    updateFailChartTitle('Toplam Tamir', false);
+}
+
+// Update fail chart title and back button
+function updateFailChartTitle(title, showBackButton) {
+    const failChartContainer = document.querySelector('#totalFailChart').closest('.bg-white');
+    if (!failChartContainer) return;
+
+    let titleElement = failChartContainer.querySelector('h3');
+    if (!titleElement) return;
+
+    // Remove existing back button if any
+    const existingBackButton = failChartContainer.querySelector('.fail-back-button');
+    if (existingBackButton) {
+        existingBackButton.remove();
+    }
+
+    // Update title
+    titleElement.textContent = title;
+
+    // Add back button if needed
+    if (showBackButton) {
+        const backButton = document.createElement('button');
+        backButton.className = 'fail-back-button ml-2 px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors';
+        backButton.textContent = '← Geri';
+        backButton.style.fontSize = '12px';
+        backButton.onclick = returnToUnitViewFail;
+        
+        // Create a flex container for title and button
+        const headerContainer = document.createElement('div');
+        headerContainer.className = 'flex items-center justify-between mb-4';
+        
+        const titleContainer = document.createElement('div');
+        titleContainer.className = 'flex items-center';
+        titleContainer.appendChild(titleElement.cloneNode(true));
+        titleContainer.appendChild(backButton);
+        
+        headerContainer.appendChild(titleContainer);
+        
+        // Replace the original title
+        titleElement.parentNode.replaceChild(headerContainer, titleElement);
+    }
 } 

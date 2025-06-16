@@ -30,7 +30,17 @@
             <form id="dashboard-form" class="grid grid-cols-1 gap-6">
                 <!-- Units selection -->
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Üretim Yerleri</label>
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="block text-sm font-medium text-gray-700">Üretim Yerleri</label>
+                        <div class="flex space-x-2">
+                            <button type="button" id="select-all-units" class="px-3 py-1 text-xs font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">
+                                Tümünü Seç
+                            </button>
+                            <button type="button" id="deselect-all-units" class="px-3 py-1 text-xs font-medium text-gray-600 bg-gray-50 border border-gray-200 rounded hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-1">
+                                Seçimi Kaldır
+                            </button>
+                        </div>
+                    </div>
                     <div id="units-container" class="grid grid-cols-2 gap-2 px-3 py-2 border border-gray-300 rounded-md shadow-sm hover:border-blue-600">
                         <div class="flex items-center">
                             <span class="text-gray-400">Üretim yerleri yükleniyor...</span>
