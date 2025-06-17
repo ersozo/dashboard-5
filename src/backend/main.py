@@ -337,7 +337,7 @@ async def get_historical_data(unit_name: str, start_time: str, end_time: str, wo
         total_quality = total_success / total_processed if total_processed > 0 else 0
         
         # Calculate performance and theoretical quantity
-        models_with_target = [model for model in production_data if model['target'] is not None]
+        models_with_target = [model for model in production_data if model['target'] is not None and model['target'] > 0]
         total_performance = None
         total_theoretical_qty = 0
         
@@ -430,7 +430,7 @@ async def get_historical_hourly_data(unit_name: str, start_time: str, end_time: 
             hour_quality = hour_success / (hour_success + hour_fail) if (hour_success + hour_fail) > 0 else 0
             
             # Calculate hourly performance and theoretical quantity
-            models_with_target = [model for model in hour_data if model['target'] is not None]
+            models_with_target = [model for model in hour_data if model['target'] is not None and model['target'] > 0]
             hour_performance = 0
             hour_theoretical_qty = 0
             
@@ -675,7 +675,7 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 total_quality = total_success / total_processed if total_processed > 0 else 0
                 
                 # Calculate total performance and OEE using the raw model data
-                models_with_target = [model for model in raw_data if model['target'] is not None]
+                models_with_target = [model for model in raw_data if model['target'] is not None and model['target'] > 0]
                 total_performance = None
                 total_oee = None
                 total_theoretical_qty = 0
@@ -716,8 +716,9 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                             weight = model['total_qty'] / total_actual_qty
                             weighted_target_rate += weight * model['target']
                             # Calculate theoretical time for performance calculation
-                            model_theoretical_time = model['total_qty'] * (3600 / model['target'])
-                            total_theoretical_time += model_theoretical_time
+                            if model['target'] > 0:  # Safety check to prevent division by zero
+                                model_theoretical_time = model['total_qty'] * (3600 / model['target'])
+                                total_theoretical_time += model_theoretical_time
                         
                         # Calculate theoretical quantity using weighted average rate
                         total_theoretical_qty = (operation_time / 3600) * weighted_target_rate
@@ -751,7 +752,7 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     hour_quality = hour_success / (hour_success + hour_fail) if (hour_success + hour_fail) > 0 else 0
                     
                     # Calculate hourly performance and theoretical quantity
-                    models_with_target = [model for model in hour_data if model['target'] is not None]
+                    models_with_target = [model for model in hour_data if model['target'] is not None and model['target'] > 0]
                     hour_performance = 0
                     hour_theoretical_qty = 0
                     
