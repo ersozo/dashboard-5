@@ -32,6 +32,20 @@ let failChartDrilldownState = {
     originalData: null
 };
 
+// Production chart drill-down state
+let productionChartDrilldownState = {
+    isInDrilldown: false,
+    selectedUnit: null,
+    originalData: null
+};
+
+// Performance chart drill-down state
+let performanceChartDrilldownState = {
+    isInDrilldown: false,
+    selectedUnit: null,
+    originalData: null
+};
+
 // UI elements
 let loadingIndicator;
 let chartsContainer;
@@ -441,7 +455,17 @@ function createCharts() {
                     ticks: { stepSize: 1 }
                 }
             },
-            plugins: { legend: { display: false } }
+            plugins: { legend: { display: false } },
+            onClick: (event, elements) => {
+                if (elements.length > 0) {
+                    const elementIndex = elements[0].index;
+                    if (!productionChartDrilldownState.isInDrilldown) {
+                        // Drill down to unit models - get current unit name from chart labels
+                        const unitName = totalSuccessChart.data.labels[elementIndex];
+                        drillDownToUnitModelsProduction(unitName);
+                    }
+                }
+            }
         }
     });
     
@@ -551,7 +575,17 @@ function createCharts() {
                     }
                 }
             },
-            plugins: { legend: { display: false } }
+            plugins: { legend: { display: false } },
+            onClick: (event, elements) => {
+                if (elements.length > 0) {
+                    const elementIndex = elements[0].index;
+                    if (!performanceChartDrilldownState.isInDrilldown) {
+                        // Drill down to unit models - get current unit name from chart labels
+                        const unitName = performanceChart.data.labels[elementIndex];
+                        drillDownToUnitModelsPerformance(unitName);
+                    }
+                }
+            }
         }
     });
     
@@ -566,7 +600,11 @@ function updateCharts() {
     const unitNames = sortedData.unitNames;
     const unitMetrics = sortedData.unitMetrics;
     
-    totalSuccessChart.data.labels = unitNames;
+    // Only update production chart if not in drill-down mode
+    if (!productionChartDrilldownState.isInDrilldown) {
+        totalSuccessChart.data.labels = unitNames;
+        totalSuccessChart.data.datasets[0].data = unitMetrics.map(m => m.totalSuccess);
+    }
     
     // Only update fail chart if not in drill-down mode
     if (!failChartDrilldownState.isInDrilldown) {
@@ -580,21 +618,11 @@ function updateCharts() {
         qualityChart.data.datasets[0].data = unitMetrics.map(m => m.quality);
     }
     
-    performanceChart.data.labels = unitNames;
-    
-    totalSuccessChart.data.datasets[0].data = unitMetrics.map(m => m.totalSuccess);
-    
-    // Only update fail data if not in drill-down mode
-    if (!failChartDrilldownState.isInDrilldown) {
-        totalFailChart.data.datasets[0].data = unitMetrics.map(m => m.totalFail);
+    // Only update performance chart if not in drill-down mode
+    if (!performanceChartDrilldownState.isInDrilldown) {
+        performanceChart.data.labels = unitNames;
+        performanceChart.data.datasets[0].data = unitMetrics.map(m => m.performance);
     }
-    
-    // Only update quality data if not in drill-down mode
-    if (!qualityChartDrilldownState.isInDrilldown) {
-        qualityChart.data.datasets[0].data = unitMetrics.map(m => m.quality);
-    }
-    
-    performanceChart.data.datasets[0].data = unitMetrics.map(m => m.performance);
     
     totalSuccessChart.update('none');
     
@@ -885,6 +913,258 @@ function updateFailChartTitle(title, showBackButton) {
         backButton.textContent = '← Geri';
         backButton.style.fontSize = '12px';
         backButton.onclick = returnToUnitViewFail;
+        
+        // Create a flex container for title and button
+        const headerContainer = document.createElement('div');
+        headerContainer.className = 'flex items-center justify-between mb-4';
+        
+        const titleContainer = document.createElement('div');
+        titleContainer.className = 'flex items-center';
+        titleContainer.appendChild(titleElement.cloneNode(true));
+        titleContainer.appendChild(backButton);
+        
+        headerContainer.appendChild(titleContainer);
+        
+        // Replace the original title
+        titleElement.parentNode.replaceChild(headerContainer, titleElement);
+    }
+}
+
+// Drill down to show model-level production data for a specific unit
+function drillDownToUnitModelsProduction(unitName) {
+    const unitDataObj = unitData[unitName];
+    if (!unitDataObj) return;
+
+    // Store original data for returning back
+    productionChartDrilldownState.originalData = {
+        labels: totalSuccessChart.data.labels.slice(),
+        data: totalSuccessChart.data.datasets[0].data.slice(),
+        backgroundColor: totalSuccessChart.data.datasets[0].backgroundColor.slice(),
+        borderColor: totalSuccessChart.data.datasets[0].borderColor.slice(),
+        title: 'Toplam Üretim'
+    };
+    
+    productionChartDrilldownState.isInDrilldown = true;
+    productionChartDrilldownState.selectedUnit = unitName;
+
+    // Get model data
+    const models = unitDataObj.models || [];
+    
+    if (models.length === 0) {
+        console.log('[HISTORICAL PRODUCTION DRILL] No model data available for unit:', unitName);
+        return;
+    }
+
+    // Calculate production quantities for each model
+    const modelData = models.map(model => {
+        return {
+            name: model.model || 'Unknown Model',
+            successQty: model.success_qty || 0
+        };
+    });
+
+    // Sort models by production quantity descending
+    modelData.sort((a, b) => b.successQty - a.successQty);
+
+    // Colors for models
+    const modelColors = [
+        '#3B82F6', '#1D4ED8', '#1E40AF', '#1E3A8A', 
+        '#1F2937', '#60A5FA', '#93C5FD', '#DBEAFE',
+        '#EFF6FF', '#F0F9FF', '#10B981', '#059669'
+    ];
+
+    // Update production chart with model data
+    totalSuccessChart.data.labels = modelData.map(m => m.name);
+    totalSuccessChart.data.datasets[0].data = modelData.map(m => m.successQty);
+    totalSuccessChart.data.datasets[0].backgroundColor = modelColors.slice(0, modelData.length);
+    totalSuccessChart.data.datasets[0].borderColor = modelColors.slice(0, modelData.length);
+    totalSuccessChart.data.datasets[0].label = `${unitName} - Model Üretim`;
+    
+    totalSuccessChart.update('active');
+
+    // Update chart title and add back button
+    updateProductionChartTitle(`${unitName} - Model Üretim Detayı`, true);
+    
+    console.log(`[HISTORICAL PRODUCTION DRILL] Drilled down to ${unitName} models:`, modelData);
+}
+
+// Return to unit-level view for production chart
+function returnToUnitViewProduction() {
+    if (!productionChartDrilldownState.isInDrilldown || !productionChartDrilldownState.originalData) return;
+
+    // Restore original data
+    const originalData = productionChartDrilldownState.originalData;
+    totalSuccessChart.data.labels = originalData.labels;
+    totalSuccessChart.data.datasets[0].data = originalData.data;
+    totalSuccessChart.data.datasets[0].backgroundColor = originalData.backgroundColor;
+    totalSuccessChart.data.datasets[0].borderColor = originalData.borderColor;
+    totalSuccessChart.data.datasets[0].label = 'Toplam Üretim';
+    
+    totalSuccessChart.update('active');
+
+    // Reset drill-down state
+    productionChartDrilldownState.isInDrilldown = false;
+    productionChartDrilldownState.selectedUnit = null;
+    productionChartDrilldownState.originalData = null;
+
+    // Update chart title and remove back button
+    updateProductionChartTitle('Toplam Üretim', false);
+    
+    console.log('[HISTORICAL PRODUCTION DRILL] Returned to unit-level view');
+}
+
+// Update production chart title and back button
+function updateProductionChartTitle(title, showBackButton) {
+    const productionChartContainer = document.querySelector('#totalSuccessChart').closest('.bg-white');
+    if (!productionChartContainer) return;
+
+    let titleElement = productionChartContainer.querySelector('h3');
+    if (!titleElement) return;
+
+    // Remove existing back button if any
+    const existingBackButton = productionChartContainer.querySelector('.production-back-button');
+    if (existingBackButton) {
+        existingBackButton.remove();
+    }
+
+    // Update title
+    titleElement.textContent = title;
+
+    // Add back button if needed
+    if (showBackButton) {
+        const backButton = document.createElement('button');
+        backButton.className = 'production-back-button ml-2 px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors';
+        backButton.textContent = '← Geri';
+        backButton.style.fontSize = '12px';
+        backButton.onclick = returnToUnitViewProduction;
+        
+        // Create a flex container for title and button
+        const headerContainer = document.createElement('div');
+        headerContainer.className = 'flex items-center justify-between mb-4';
+        
+        const titleContainer = document.createElement('div');
+        titleContainer.className = 'flex items-center';
+        titleContainer.appendChild(titleElement.cloneNode(true));
+        titleContainer.appendChild(backButton);
+        
+        headerContainer.appendChild(titleContainer);
+        
+        // Replace the original title
+        titleElement.parentNode.replaceChild(headerContainer, titleElement);
+    }
+}
+
+// Drill down to show model-level performance data for a specific unit
+function drillDownToUnitModelsPerformance(unitName) {
+    const unitDataObj = unitData[unitName];
+    if (!unitDataObj) return;
+
+    // Store original data for returning back
+    performanceChartDrilldownState.originalData = {
+        labels: performanceChart.data.labels.slice(),
+        data: performanceChart.data.datasets[0].data.slice(),
+        backgroundColor: performanceChart.data.datasets[0].backgroundColor.slice(),
+        borderColor: performanceChart.data.datasets[0].borderColor.slice(),
+        title: 'OEE (%)'
+    };
+    
+    performanceChartDrilldownState.isInDrilldown = true;
+    performanceChartDrilldownState.selectedUnit = unitName;
+
+    // Get model data
+    const models = unitDataObj.models || [];
+    
+    if (models.length === 0) {
+        console.log('[HISTORICAL PERFORMANCE DRILL] No model data available for unit:', unitName);
+        return;
+    }
+
+    // Calculate performance for each model
+    const modelData = models.map(model => {
+        let performance = 0;
+        if (model.performance !== null && model.performance !== undefined) {
+            performance = model.performance * 100; // Convert to percentage
+        }
+        return {
+            name: model.model || 'Unknown Model',
+            performance: performance
+        };
+    });
+
+    // Sort models by performance descending
+    modelData.sort((a, b) => b.performance - a.performance);
+
+    // Colors for models (green tones for performance)
+    const modelColors = [
+        '#10B981', '#059669', '#047857', '#065F46', 
+        '#064E3B', '#34D399', '#6EE7B7', '#A7F3D0',
+        '#D1FAE5', '#ECFDF5', '#3B82F6', '#1D4ED8'
+    ];
+
+    // Update performance chart with model data
+    performanceChart.data.labels = modelData.map(m => m.name);
+    performanceChart.data.datasets[0].data = modelData.map(m => m.performance);
+    performanceChart.data.datasets[0].backgroundColor = modelColors.slice(0, modelData.length);
+    performanceChart.data.datasets[0].borderColor = modelColors.slice(0, modelData.length);
+    performanceChart.data.datasets[0].label = `${unitName} - Model Performance (%)`;
+    
+    performanceChart.update('active');
+
+    // Update chart title and add back button
+    updatePerformanceChartTitle(`${unitName} - Model Performance Detayı`, true);
+    
+    console.log(`[HISTORICAL PERFORMANCE DRILL] Drilled down to ${unitName} models:`, modelData);
+}
+
+// Return to unit-level view for performance chart
+function returnToUnitViewPerformance() {
+    if (!performanceChartDrilldownState.isInDrilldown || !performanceChartDrilldownState.originalData) return;
+
+    // Restore original data
+    const originalData = performanceChartDrilldownState.originalData;
+    performanceChart.data.labels = originalData.labels;
+    performanceChart.data.datasets[0].data = originalData.data;
+    performanceChart.data.datasets[0].backgroundColor = originalData.backgroundColor;
+    performanceChart.data.datasets[0].borderColor = originalData.borderColor;
+    performanceChart.data.datasets[0].label = 'OEE (%)';
+    
+    performanceChart.update('active');
+
+    // Reset drill-down state
+    performanceChartDrilldownState.isInDrilldown = false;
+    performanceChartDrilldownState.selectedUnit = null;
+    performanceChartDrilldownState.originalData = null;
+
+    // Update chart title and remove back button
+    updatePerformanceChartTitle('OEE (%)', false);
+    
+    console.log('[HISTORICAL PERFORMANCE DRILL] Returned to unit-level view');
+}
+
+// Update performance chart title and back button
+function updatePerformanceChartTitle(title, showBackButton) {
+    const performanceChartContainer = document.querySelector('#performanceChart').closest('.bg-white');
+    if (!performanceChartContainer) return;
+
+    let titleElement = performanceChartContainer.querySelector('h3');
+    if (!titleElement) return;
+
+    // Remove existing back button if any
+    const existingBackButton = performanceChartContainer.querySelector('.performance-back-button');
+    if (existingBackButton) {
+        existingBackButton.remove();
+    }
+
+    // Update title
+    titleElement.textContent = title;
+
+    // Add back button if needed
+    if (showBackButton) {
+        const backButton = document.createElement('button');
+        backButton.className = 'performance-back-button ml-2 px-3 py-1 text-sm bg-green-100 text-green-700 rounded hover:bg-green-200 transition-colors';
+        backButton.textContent = '← Geri';
+        backButton.style.fontSize = '12px';
+        backButton.onclick = returnToUnitViewPerformance;
         
         // Create a flex container for title and button
         const headerContainer = document.createElement('div');
