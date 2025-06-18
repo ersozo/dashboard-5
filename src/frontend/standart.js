@@ -807,7 +807,7 @@ function createUnitTables(unitDataMap) {
             performanceCell.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-500';
             performanceCell.id = `performance-${unit.replace(/\s+/g, '-')}-${model.model.replace(/\s+/g, '-')}`;
             const performance = (model.performance !== undefined && model.performance !== null) 
-                ? (model.performance * 100).toFixed(0) 
+                ? (model.performance * 100).toFixed(1) 
                 : '-';
             performanceCell.textContent = performance;
                 row.appendChild(performanceCell);

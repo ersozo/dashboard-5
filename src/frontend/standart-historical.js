@@ -496,7 +496,7 @@ function createUnitSection(unitName, unitDataObj) {
         const performanceTd = document.createElement('td');
         performanceTd.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-500';
         const performance = (row.performance !== undefined && row.performance !== null) 
-            ? (row.performance * 100).toFixed(0) 
+            ? (row.performance * 100).toFixed(1) 
             : '-';
         performanceTd.textContent = performance;
         tr.appendChild(performanceTd);
