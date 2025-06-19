@@ -1040,41 +1040,43 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
         // Set up optimized interval to request data
         // Use shorter intervals when tab is visible, longer when background
         const getDataRequestInterval = () => {
-            // Base interval: 30 seconds for live data
-            const baseInterval = 30000;
+            // IMPROVED: Use shorter intervals to overcome browser throttling in background tabs
+            // Base interval: 15 seconds for all cases (aggressive for real-time updates)
+            const aggressiveInterval = 15000;
 
-            // If tab is in background, use longer interval to avoid unnecessary requests
-            // since browser throttling will delay them anyway
-            if (!isTabVisible) {
-                return Math.max(baseInterval, 60000); // At least 60 seconds when hidden
-            }
-
-            return baseInterval; // 30 seconds for live data when visible
+            // FIXED: Don't use longer intervals for background tabs - this was counter-productive!
+            // Instead, use consistent aggressive intervals to fight browser throttling
+            return aggressiveInterval; // 15 seconds for all cases - consistent real-time updates
         };
 
         // Create adaptive interval that adjusts based on visibility
         let currentInterval = getDataRequestInterval();
         updateInterval = setInterval(sendDataRequest, currentInterval);
 
-        // Monitor visibility changes and adjust interval accordingly
+        // Monitor connection health and force updates for background tab optimization
         const adaptiveIntervalCheck = setInterval(() => {
-            const newInterval = getDataRequestInterval();
-            if (newInterval !== currentInterval) {
-                console.log(`[ADAPTIVE] Updating data request interval for "${unitName}": ${currentInterval}ms → ${newInterval}ms (visible: ${isTabVisible})`);
-
-                // Clear old interval and create new one
-                if (updateInterval) {
-                    clearInterval(updateInterval);
-                }
-                updateInterval = setInterval(sendDataRequest, newInterval);
-                currentInterval = newInterval;
+            // No longer change intervals based on visibility - keep consistent aggressive updates
+            // Instead, monitor connection health and force immediate updates on visibility changes
+            
+            if (unitSocket.readyState !== WebSocket.OPEN) {
+                console.log(`[HOURLY ADAPTIVE] Connection lost for "${unitName}", will handle reconnection`);
+                clearInterval(adaptiveIntervalCheck);
+                clearInterval(updateInterval);
+                return;
             }
-        }, 10000); // Check every 10 seconds for interval adaptation
+            
+            // If tab just became visible and some time has passed, force immediate update
+            const timeSinceVisibilityChange = Date.now() - lastVisibilityChange;
+            if (isTabVisible && timeSinceVisibilityChange < 30000) { // Within 30 seconds of becoming visible
+                console.log(`[HOURLY ADAPTIVE] Tab recently became visible, ensuring fresh data for "${unitName}"`);
+                sendDataRequest(); // Send immediate request for fresh data
+            }
+        }, 10000); // Check every 10 seconds for adaptive optimization
 
         // Store the adaptive check interval for cleanup
         unitSocket._adaptiveInterval = adaptiveIntervalCheck;
 
-        console.log(`[WEBSOCKET] Set up adaptive data requests for "${unitName}" with initial interval: ${currentInterval}ms`);
+        console.log(`[HOURLY WEBSOCKET] Set up aggressive real-time updates for "${unitName}" with ${currentInterval}ms interval (background tab optimized)`);
     };
 
     unitSocket.onmessage = (event) => {
@@ -1203,16 +1205,16 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                     unitContainers[unitName].lastData = JSON.parse(JSON.stringify(data));
                 }
 
-                // Only call the callback once for initial data
+                // Always update the display for both initial and subsequent data
                 if (!hasReceivedInitialData) {
                     hasReceivedInitialData = true;
                     clearTimeout(connectionTimeout);
                     callback(data);
-                } else {
-                    // If not the initial load, update the display directly
-                    createOrUpdateHourlyDataDisplay(unitName, data);
-                    updateLastUpdateTime();
                 }
+                
+                // ALWAYS update the display for real-time table updates
+                createOrUpdateHourlyDataDisplay(unitName, data);
+                updateLastUpdateTime();
             }
         } catch (error) {
             console.error(`Error parsing hourly data for "${unitName}":`, error);
@@ -1261,9 +1263,9 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             reconnectAttempts++;
 
             // Use longer reconnect delay if tab is in background to avoid overwhelming the server
-            const reconnectDelay = !isTabVisible ?
-                Math.min(30000, 1000 * reconnectAttempts * 3) : // Up to 30s when hidden
-                1000 * reconnectAttempts; // Standard delay when visible
+            // IMPROVED: Use consistent reconnection strategy regardless of tab visibility
+            // Fast reconnection is MORE important for background tabs to maintain real-time updates
+            const reconnectDelay = 1000 * reconnectAttempts; // Standard progressive delay for all cases
 
             console.log(`[RECONNECT] Waiting ${reconnectDelay}ms before reconnect attempt (visible: ${isTabVisible})`);
 

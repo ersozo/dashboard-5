@@ -5,18 +5,32 @@ let endTime = null;
 let timePresetValue = '';
 let workingModeValue = 'mode1';
 
+// Loading and UI elements
+let loadingIndicator = null;
+let chartsContainer = null;
+let selectedUnitsDisplay = null;
+let timeRangeDisplay = null;
+let lastUpdateTimeElement = null;
+let summaryContainer = null;
+
 // Chart instances
 let totalSuccessChart = null;
 let totalFailChart = null;
 let qualityChart = null;
 let performanceChart = null;
+let oeeChart = null;
 
 // Unit data storage
 let unitData = {};
 
+// Track elements that need flash animation on update
+let elementsToFlashOnUpdate = [];
+
 // Current sort metric and order
-let currentSortMetric = 'totalSuccess';
-let currentSortOrder = 'desc';
+let currentSortMetric = 'totalSuccess'; // default sort by total success
+let currentSortOrder = 'desc'; // desc or asc
+
+// Note: No background tab optimization needed for historical views since data is static
 
 // Quality chart drill-down state
 let qualityChartDrilldownState = {
@@ -45,14 +59,6 @@ let performanceChartDrilldownState = {
     selectedUnit: null,
     originalData: null
 };
-
-// UI elements
-let loadingIndicator;
-let chartsContainer;
-let selectedUnitsDisplay;
-let timeRangeDisplay;
-let lastUpdateTimeElement;
-let summaryContainer;
 
 // Working mode configurations
 const workingModes = {
@@ -89,6 +95,8 @@ document.addEventListener('DOMContentLoaded', () => {
     lastUpdateTimeElement = document.getElementById('last-update-time');
     summaryContainer = document.getElementById('summary-container');
 
+    // No background tab optimization needed for historical data
+    
     // Parse URL parameters
     const params = new URLSearchParams(window.location.search);
     
@@ -127,6 +135,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Load historical data
     loadHistoricalData();
+    
+    // No cleanup needed for historical views
 });
 
 // Setup sorting event listeners for summary cards
@@ -286,7 +296,10 @@ function formatDateForDisplay(date) {
 
 // Update last update time for historical data
 function updateLastUpdateTime() {
-    lastUpdateTimeElement.textContent = `Geçmiş veri: ${formatDateForDisplay(endTime)}`;
+    // For historical data, show the historical period instead of current time
+    if (lastUpdateTimeElement) {
+        lastUpdateTimeElement.textContent = `Geçmiş veri: ${formatDateForDisplay(endTime)}`;
+    }
 }
 
 // Load historical data for all units

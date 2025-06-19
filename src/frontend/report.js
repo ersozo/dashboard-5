@@ -23,6 +23,12 @@ let elementsToFlashOnUpdate = [];
 let currentSortMetric = 'totalSuccess'; // default sort by total success
 let currentSortOrder = 'desc'; // desc or asc
 
+// Background tab handling variables
+let isTabVisible = true;
+let lastVisibilityChange = Date.now();
+let visibilityCheckInterval = null;
+let clockUpdateInterval = null; // Add clock update interval for live time display
+
 // Quality chart drill-down state
 let qualityChartDrilldownState = {
     isInDrilldown: false,
@@ -96,6 +102,14 @@ document.addEventListener('DOMContentLoaded', () => {
     updateIndicator = document.getElementById('update-indicator');
     summaryContainer = document.getElementById('summary-container');
 
+    // Set up background tab optimization
+    isTabVisible = !document.hidden;
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    startVisibilityCheck();
+    
+    // Start clock updates for live data display
+    startTimeUpdates();
+
     // Parse URL parameters
     const params = new URLSearchParams(window.location.search);
     
@@ -129,6 +143,8 @@ document.addEventListener('DOMContentLoaded', () => {
     
     // Clean up on page unload
     window.addEventListener('beforeunload', () => {
+        stopVisibilityCheck();
+        stopTimeUpdates();
         for (const unitName in unitSockets) {
             if (unitSockets[unitName]) {
                 unitSockets[unitName].close();
@@ -275,7 +291,19 @@ function updateSelectedUnitsDisplay() {
 
 // Update time range display for live data
 function updateTimeDisplay() {
-    let timeRangeText = `${formatDateForDisplay(startTime)} - ${formatDateForDisplay(endTime)}`;
+    // For live data, use current time as the end time to show accurate live range
+    const now = new Date();
+    const currentTimeDifference = now.getTime() - endTime.getTime();
+    const fiveMinutesInMs = 5 * 60 * 1000;
+    
+    // Determine if this is live data (end time within 5 minutes of current time or is shift-based)
+    const isShiftBasedView = timePresetValue && (timePresetValue.startsWith('shift'));
+    const isLiveData = currentTimeDifference <= fiveMinutesInMs || isShiftBasedView;
+    
+    // Use current time for live data, original endTime for historical data
+    const displayEndTime = isLiveData ? now : endTime;
+    
+    let timeRangeText = `${formatDateForDisplay(startTime)} - ${formatDateForDisplay(displayEndTime)}`;
     
     if (timePresetValue && workingModeValue) {
         const shifts = workingModes[workingModeValue].shifts;
@@ -288,8 +316,12 @@ function updateTimeDisplay() {
         }
     }
     
-    // Live data indicator
-    timeRangeText = `🟢 Canlı Veri: ${timeRangeText}`;
+    // Add live data indicator for live data, or historical indicator for historical data
+    if (isLiveData) {
+        timeRangeText = `🟢 Canlı Veri: ${timeRangeText}`;
+    } else {
+        timeRangeText = `📊 Geçmiş Veri: ${timeRangeText}`;
+    }
     
     if (timeRangeDisplay) {
         timeRangeDisplay.textContent = timeRangeText;
@@ -313,14 +345,14 @@ function formatDateForDisplay(date) {
 
 // Update last update time for live data
 function updateLastUpdateTime() {
-    const now = new Date();
-    
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    
-    lastUpdateTimeElement.textContent = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
-    
+    if (lastUpdateTimeElement) {
+        const now = new Date();
+        const hours = String(now.getHours()).padStart(2, '0');
+        const minutes = String(now.getMinutes()).padStart(2, '0');
+        const seconds = String(now.getSeconds()).padStart(2, '0');
+        lastUpdateTimeElement.textContent = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
+    }
+
     // Apply flash effect to elements that changed
     const elementsToFlash = [...elementsToFlashOnUpdate]; // Create a copy
     elementsToFlashOnUpdate = []; // Clear the array for next update
@@ -336,6 +368,134 @@ function updateLastUpdateTime() {
             }, 1000);
         }
     });
+}
+
+// Background tab optimization functions
+function handleVisibilityChange() {
+    const wasVisible = isTabVisible;
+    isTabVisible = !document.hidden;
+    lastVisibilityChange = Date.now();
+
+    console.log(`[REPORT VISIBILITY] Tab visibility changed: ${wasVisible ? 'visible' : 'hidden'} → ${isTabVisible ? 'visible' : 'hidden'}`);
+
+    if (!wasVisible && isTabVisible) {
+        // Tab became visible - force immediate refresh for real-time data
+        console.log('[REPORT VISIBILITY] Tab became visible - forcing immediate data refresh');
+
+        // For live data views, update endTime to current time to maintain live status
+        const now = new Date();
+        const originalTimeDifference = now.getTime() - endTime.getTime();
+        const fiveMinutesInMs = 5 * 60 * 1000;
+        const wasOriginallyLive = originalTimeDifference <= fiveMinutesInMs;
+
+        // Check if this is a shift-based live data view
+        const isShiftBasedView = timePresetValue && (timePresetValue.startsWith('shift'));
+        const shouldUpdateEndTime = wasOriginallyLive || isShiftBasedView;
+
+        console.log(`[REPORT VISIBILITY] Was originally live: ${wasOriginallyLive}, Is shift-based: ${isShiftBasedView}`);
+
+        if (shouldUpdateEndTime) {
+            // This was originally a live data view, so update endTime to maintain live status
+            console.log('[REPORT VISIBILITY] Updating endTime to maintain live data status');
+            const oldEndTime = endTime.toISOString();
+            endTime = now;
+            console.log(`[REPORT VISIBILITY] EndTime updated: ${oldEndTime} → ${endTime.toISOString()}`);
+
+            // Update the time display to reflect the new end time
+            updateTimeDisplay();
+            updateLastUpdateTime();
+        }
+
+        // Force data refresh for all active WebSocket connections
+        forceDataRefreshAllUnits();
+
+        // Force another UI update after data refresh
+        setTimeout(() => {
+            updateTimeDisplay();
+            updateLastUpdateTime();
+            console.log('[REPORT VISIBILITY] Forced UI update after data refresh');
+        }, 100);
+    }
+}
+
+function startVisibilityCheck() {
+    // Stop any existing check
+    stopVisibilityCheck();
+    
+    // Start visibility monitoring to handle browser throttling
+    visibilityCheckInterval = setInterval(() => {
+        const currentVisible = !document.hidden;
+        if (currentVisible !== isTabVisible) {
+            // Visibility state changed, handle it
+            console.log('[REPORT VISIBILITY] Detected visibility change via monitoring');
+            handleVisibilityChange();
+        }
+    }, 5000); // Check every 5 seconds
+
+    console.log('[REPORT VISIBILITY] Started background tab optimization');
+}
+
+function stopVisibilityCheck() {
+    if (visibilityCheckInterval) {
+        clearInterval(visibilityCheckInterval);
+        visibilityCheckInterval = null;
+    }
+}
+
+// Start time updates for live data
+function startTimeUpdates() {
+    // Stop any existing timer
+    stopTimeUpdates();
+    
+    // Update time display every second for live data
+    clockUpdateInterval = setInterval(() => {
+        updateTimeDisplay();
+    }, 1000);
+    
+    console.log('[REPORT TIME] Started live time updates');
+}
+
+function stopTimeUpdates() {
+    if (clockUpdateInterval) {
+        clearInterval(clockUpdateInterval);
+        clockUpdateInterval = null;
+    }
+}
+
+function forceDataRefreshAllUnits() {
+    console.log('[REPORT VISIBILITY] forceDataRefreshAllUnits called');
+    console.log('[REPORT VISIBILITY] Current endTime:', endTime.toISOString());
+    console.log('[REPORT VISIBILITY] Current time:', new Date().toISOString());
+
+    for (const unitName in unitSockets) {
+        const socket = unitSockets[unitName];
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            console.log(`[REPORT VISIBILITY] Forcing data refresh for unit: ${unitName}`);
+
+            // For live data, always use current time as end time
+            const requestEndTime = new Date();
+            const params = {
+                start_time: startTime.toISOString(),
+                end_time: requestEndTime.toISOString(),
+                working_mode: workingModeValue || 'mode1'
+            };
+
+            console.log(`[REPORT VISIBILITY] Sending refresh request for ${unitName}:`, {
+                start: params.start_time,
+                end: params.end_time,
+                working_mode: params.working_mode
+            });
+
+            // Show update indicator
+            if (updateIndicator) {
+                updateIndicator.classList.remove('hidden');
+            }
+
+            socket.send(JSON.stringify(params));
+        } else {
+            console.log(`[REPORT VISIBILITY] Skipping ${unitName} - socket not ready (state: ${socket ? socket.readyState : 'null'})`);
+        }
+    }
 }
 
 // Load data for all units
@@ -405,7 +565,32 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     
     unitSocket.onopen = () => {
         sendDataRequest();
-        updateInterval = setInterval(sendDataRequest, 30000); // Update every 30 seconds
+        
+        // AGGRESSIVE REAL-TIME UPDATES: Use shorter intervals to overcome browser throttling
+        const getOptimalUpdateInterval = () => {
+            // Use 15 seconds for all cases - aggressive enough to overcome browser throttling
+            // while still being reasonable for server load
+            return 15000;
+        };
+
+        updateInterval = setInterval(sendDataRequest, getOptimalUpdateInterval());
+        
+        // Add adaptive interval monitoring for even better background tab handling
+        const adaptiveCheck = setInterval(() => {
+            const optimalInterval = getOptimalUpdateInterval();
+            // For report views, we want consistent updates regardless of visibility
+            // So we don't change intervals, but we do monitor for connection health
+            if (unitSocket.readyState !== WebSocket.OPEN) {
+                console.log(`[REPORT ADAPTIVE] Connection lost for ${unitName}, will reconnect`);
+                clearInterval(adaptiveCheck);
+                clearInterval(updateInterval);
+            }
+        }, 5000);
+
+        // Store the adaptive check for cleanup
+        unitSocket._adaptiveCheck = adaptiveCheck;
+        
+        console.log(`[REPORT WEBSOCKET] Set up aggressive real-time updates for "${unitName}" with ${getOptimalUpdateInterval()}ms interval`);
     };
     
     unitSocket.onmessage = (event) => {
@@ -477,6 +662,10 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
+        if (unitSocket._adaptiveCheck) {
+            clearInterval(unitSocket._adaptiveCheck);
+            unitSocket._adaptiveCheck = null;
+        }
         if (!hasReceivedInitialData) {
             hasReceivedInitialData = true;
             clearTimeout(connectionTimeout);
@@ -490,6 +679,11 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
+        if (unitSocket._adaptiveCheck) {
+            clearInterval(unitSocket._adaptiveCheck);
+            unitSocket._adaptiveCheck = null;
+        }
+        console.log(`[REPORT WEBSOCKET] Connection closed for "${unitName}"`);
         if (!hasReceivedInitialData) {
             hasReceivedInitialData = true;
             clearTimeout(connectionTimeout);

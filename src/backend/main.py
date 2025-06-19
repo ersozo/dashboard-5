@@ -622,7 +622,15 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                 except Exception as e:
                     break
             except Exception as e:
-                print(f"[STANDARD DEBUG] Exception: {e}")
+                # Filter out normal WebSocket connection closures - these are expected
+                error_msg = str(e).lower()
+                if ('keepalive ping timeout' not in error_msg and '1011' not in error_msg and 
+                    '1005' not in error_msg and 'no status received' not in error_msg):
+                    print(f"[STANDARD DEBUG] Exception: {e}")
+                else:
+                    # Normal WebSocket connection closure - log at lower level
+                    print(f"[STANDARD INFO] WebSocket connection closed (normal): {e}")
+                
                 try:
                     error_response = {"error": "An unexpected error occurred"}
                     await websocket.send_json(error_response)
@@ -737,8 +745,23 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 hourly_data = []
                 current_hour = start_time.replace(minute=0, second=0, microsecond=0)
                 
+                # Determine if this is live data to use current_time for the last hour
+                is_live_data = False
+                if current_time:
+                    time_difference = current_time - end_time
+                    five_minutes = timedelta(minutes=5)
+                    is_live_data = time_difference <= five_minutes
+                
                 while current_hour < end_time:
-                    hour_end = min(current_hour + timedelta(hours=1), end_time)
+                    hour_end = current_hour + timedelta(hours=1)
+                    
+                    # For the current hour in live data, use current_time as hour_end
+                    if is_live_data and current_time > current_hour and current_time < hour_end:
+                        # This is the current hour in live data - use current_time as hour_end
+                        hour_end = current_time
+                    else:
+                        # For historical data or completed hours, use the regular hour boundary or end_time
+                        hour_end = min(hour_end, end_time)
                     
                     # Get data for this specific hour
                     hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
@@ -832,17 +855,39 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 except Exception as e:
                     break
             except Exception as e:
-                print(f"[HOURLY WEBSOCKET] Error in hourly WebSocket handler for {unit_name}: {str(e)}")
-                import traceback
-                traceback.print_exc()
+                # Filter out normal WebSocket connection closures - these are expected
+                error_msg = str(e).lower()
+                if ('keepalive ping timeout' in error_msg or '1011' in error_msg or 
+                    'connection closed' in error_msg or '1005' in error_msg or 
+                    'no status received' in error_msg):
+                    # Normal WebSocket connection closure - log at lower level
+                    print(f"[HOURLY INFO] WebSocket connection closed for {unit_name} (normal): {str(e)}")
+                else:
+                    # Actual error - log with full traceback
+                    print(f"[HOURLY WEBSOCKET] Error in hourly WebSocket handler for {unit_name}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                
                 try:
                     error_response = {"error": f"An unexpected error occurred: {str(e)}"}
                     await websocket.send_json(error_response)
                 except Exception as send_err:
-                    print(f"[HOURLY WEBSOCKET] Failed to send error response: {str(send_err)}")
+                    # Filter out normal connection closed errors for send failures too
+                    send_error_msg = str(send_err).lower()
+                    if ('keepalive ping timeout' not in send_error_msg and '1011' not in send_error_msg and 
+                        'connection closed' not in send_error_msg and '1005' not in send_error_msg and 
+                        'no status received' not in send_error_msg):
+                        print(f"[HOURLY WEBSOCKET] Failed to send error response: {str(send_err)}")
                     break
     except Exception as e:
-        print(f"Outer exception in hourly WebSocket handler: {e}")
+        # Filter out normal WebSocket connection closures for outer exceptions too
+        error_msg = str(e).lower()
+        if ('keepalive ping timeout' in error_msg or '1011' in error_msg or 
+            'connection closed' in error_msg or '1005' in error_msg or 
+            'no status received' in error_msg):
+            print(f"[HOURLY INFO] Outer WebSocket connection closed (normal): {e}")
+        else:
+            print(f"Outer exception in hourly WebSocket handler: {e}")
     finally:
         manager.disconnect(websocket, 'hourly')
 
