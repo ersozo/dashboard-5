@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import json
 import asyncio
 import os
+import time
 from typing import List, Dict
 from database import get_production_units, get_production_data, get_db_connection, TIMEZONE, calculate_break_time
 import pytz
@@ -642,6 +643,10 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
     finally:
         manager.disconnect(websocket, 'standard')
 
+# ROBUST OPTIMIZATION: Add simple caching to reduce database load for hourly data
+hourly_data_cache = {}
+cache_duration = 30  # Cache for 30 seconds to balance performance and freshness
+
 # WebSocket endpoint for hourly data
 @app.websocket("/ws/hourly/{unit_name}")
 async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
@@ -771,8 +776,35 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                         # For historical data or completed hours, use the regular hour boundary or actual_end_time_for_hourly
                         hour_end = min(hour_end, actual_end_time_for_hourly)
                     
-                    # Get data for this specific hour
-                    hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
+                    # ROBUST OPTIMIZATION: Use smart caching to reduce database calls
+                    # Create cache key for this specific hour query
+                    cache_key = f"{unit_name}_{current_hour.isoformat()}_{hour_end.isoformat()}_{working_mode}"
+                    current_timestamp = time.time()
+                    
+                    # Check if we have recent cached data for this exact query
+                    if (cache_key in hourly_data_cache and 
+                        current_timestamp - hourly_data_cache[cache_key]['timestamp'] < cache_duration):
+                        # Use cached data (significantly faster)
+                        hour_data = hourly_data_cache[cache_key]['data']
+                        print(f"[HOURLY CACHE] Using cached data for {unit_name} hour {current_hour.strftime('%H:%M')}")
+                    else:
+                        # Get fresh data from database (maintains exact same business logic)
+                        hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
+                        
+                        # Cache the result for future requests
+                        hourly_data_cache[cache_key] = {
+                            'data': hour_data,
+                            'timestamp': current_timestamp
+                        }
+                        print(f"[HOURLY CACHE] Fetched fresh data for {unit_name} hour {current_hour.strftime('%H:%M')}")
+                        
+                        # Clean up old cache entries to prevent memory growth
+                        keys_to_remove = []
+                        for key, cached_item in hourly_data_cache.items():
+                            if current_timestamp - cached_item['timestamp'] > cache_duration * 2:
+                                keys_to_remove.append(key)
+                        for key in keys_to_remove:
+                            del hourly_data_cache[key]
                     
                     # Calculate hourly totals
                     hour_success = sum(model['success_qty'] for model in hour_data)
@@ -861,8 +893,8 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 else:
                     break
                     
-                # FIXED: Much shorter sleep for real-time hourly updates
-                await asyncio.sleep(10)  # 10 seconds instead of 30 for responsive real-time updates
+                # OPTIMIZED: Faster sleep for real-time hourly updates with caching
+                await asyncio.sleep(8)  # 8 seconds - faster with caching to reduce load
             except WebSocketDisconnect:
                 break
             except ValueError as e:
