@@ -181,11 +181,11 @@ function startOptimizedIntervals() {
     // Clear any existing intervals
     stopOptimizedIntervals();
 
-    // OPTIMIZED: Use consistent intervals to prevent timing drift
-    // Reduce frequency but avoid variable intervals that cause synchronization issues
-    const CLOCK_UPDATE_INTERVAL = 2000; // 2 seconds - reduced from 1s for better performance
-    const SHIFT_CHECK_INTERVAL = 15000; // 15 seconds - consistent for all visibility states
-    const VISIBILITY_CHECK_INTERVAL = 10000; // 10 seconds - reduced frequency for lower overhead
+    // OPTIMIZED: Use fastest intervals for live hourly data (most critical)
+    // Hourly view needs the most responsive updates for real-time production monitoring
+    const CLOCK_UPDATE_INTERVAL = 1000; // 1 second - fastest for live time display
+    const SHIFT_CHECK_INTERVAL = 10000; // 10 seconds - fastest shift detection for hourly view
+    const VISIBILITY_CHECK_INTERVAL = 5000; // 5 seconds - fastest visibility checks for responsiveness
 
     // Clock update interval (optimized frequency)
     clockUpdateInterval = setInterval(updateCurrentTime, CLOCK_UPDATE_INTERVAL);
@@ -991,7 +991,7 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             hasReceivedInitialData = true;
             callback(null);
         }
-    }, 15000); // 15 second timeout for hourly data (can be longer as it's more complex)
+    }, 8000); // 8 second timeout for hourly data (faster for better responsiveness)
 
     function sendDataRequest() {
         // Check if this connection is marked as invalid (from previous shift)
@@ -1012,8 +1012,8 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
         if (unitSocket.readyState === WebSocket.OPEN) {
             const now = Date.now();
             
-            // Throttle requests to prevent excessive calls (minimum 15 seconds between requests for hourly data)
-            if (now - lastRequestTime < 15000) {
+            // Throttle requests to prevent excessive calls (minimum 8 seconds between requests for hourly data - most aggressive)
+            if (now - lastRequestTime < 8000) {
                 console.log(`[HOURLY THROTTLE] Skipping request for ${unitName} - too soon (${now - lastRequestTime}ms ago)`);
                 return;
             }
@@ -1059,15 +1059,14 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
         // Send initial parameters once connected
         sendDataRequest();
 
-        // OPTIMIZED INTERVAL SYSTEM - Balanced approach for hourly data
-        const UPDATE_INTERVAL = 25000; // 25 seconds - balanced for hourly view complexity
+        // OPTIMIZED INTERVAL SYSTEM - FASTEST for live hourly data (most critical)
+        const UPDATE_INTERVAL = 12000; // 12 seconds - fastest for hourly view (most critical real-time data)
         
         updateInterval = setInterval(() => {
             // Only send request if connection is still open
             if (unitSocket.readyState === WebSocket.OPEN) {
-                // For background tabs, skip some requests to reduce server load
-                // but still maintain reasonable update frequency for hourly data
-                const shouldSkipRequest = !isTabVisible && Math.random() < 0.3; // Skip 30% of requests when hidden
+                // For background tabs, skip fewer requests (hourly data is most critical)
+                const shouldSkipRequest = !isTabVisible && Math.random() < 0.15; // Skip only 15% of requests when hidden (less than other views)
                 
                 if (!shouldSkipRequest) {
                     sendDataRequest();
