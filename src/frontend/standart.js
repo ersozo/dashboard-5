@@ -868,11 +868,14 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     unitSockets[unitName] = unitSocket;
     
     let reconnectAttempts = 0;
-    const maxReconnectAttempts = 3;
-    
-    // Set up interval for data refreshing
+    const maxReconnectAttempts = 5;
     let updateInterval = null;
     let hasReceivedInitialData = false;
+    let lastRequestTime = 0;
+    
+    // Pre-calculate reusable values to reduce overhead
+    const workingMode = workingModeValue || 'mode1';
+    const startTimeISO = startTime.toISOString();
     
     function sendDataRequest() {
         // Check if this connection is marked as invalid (from previous shift)
@@ -885,38 +888,36 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
         
-        // FIXED: Only defer data requests during shift change for a limited time (2 seconds max)
+        // IMPROVED: Simplified shift change handling - don't defer requests unnecessarily
         if (isShiftChangeInProgress) {
-            console.log(`[SHIFT CHANGE] Deferring data request during shift change for "${unitName}"`);
-            // Don't completely skip - defer for a short time instead
-            setTimeout(() => {
-                if (!isShiftChangeInProgress && unitSocket.readyState === WebSocket.OPEN) {
-                    console.log(`[SHIFT CHANGE] Retrying deferred data request for "${unitName}"`);
-                    sendDataRequest();
-                }
-            }, 500); // Retry after 500ms
-            return;
+            console.log(`[SHIFT CHANGE] Allowing data request during shift change for "${unitName}" (data freshness priority)`);
         }
         
         if (unitSocket.readyState === WebSocket.OPEN) {
+            const now = Date.now();
+            
+            // Throttle requests to prevent excessive calls (minimum 12 seconds between requests)
+            if (now - lastRequestTime < 12000) {
+                console.log(`[STANDARD THROTTLE] Skipping request for ${unitName} - too soon (${now - lastRequestTime}ms ago)`);
+                return;
+            }
+            
+            lastRequestTime = now;
+            
             // LIVE data view - always show updating indicator
             showUpdatingIndicator();
             
-            // For live data, use current time as request end time (don't modify global endTime here)
-            const requestEndTime = new Date();
+            // For live data, use current time as request end time (optimized)
+            const requestEndTime = new Date(now);
             
             // Send parameters to request new data
             const params = {
-                start_time: startTime.toISOString(),
+                start_time: startTimeISO, // Reuse pre-calculated value
                 end_time: requestEndTime.toISOString(),
-                working_mode: workingModeValue || 'mode1' // Include working mode for break calculations
+                working_mode: workingMode // Reuse pre-calculated value
             };
             
-            console.log(`[DATA REQUEST] ${unitName}: Live data request`, {
-                start: params.start_time,
-                end: params.end_time
-            });
-            
+            console.log(`[STANDARD REQUEST] ${unitName}: Live data request`);
             unitSocket.send(JSON.stringify(params));
         } else {
             console.warn(`Cannot send update request - socket not open for "${unitName}", readyState: ${unitSocket.readyState}`);
@@ -956,32 +957,29 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         // Send initial parameters once connected
         sendDataRequest();
         
-        // SIMPLIFIED: Use consistent aggressive intervals for reliable real-time updates
-        const updateIntervalMs = 15000; // 15 seconds - aggressive but not overwhelming
-        updateInterval = setInterval(sendDataRequest, updateIntervalMs);
-
-        // Simple visibility-based optimization: force update when tab becomes visible
-        const visibilityOptimizer = setInterval(() => {
-            // Basic connection health check
-            if (unitSocket.readyState !== WebSocket.OPEN) {
-                console.log(`[STANDARD OPTIMIZER] Connection lost for "${unitName}", stopping optimizer`);
-                clearInterval(visibilityOptimizer);
+        // OPTIMIZED INTERVAL SYSTEM - Use balanced approach
+        const UPDATE_INTERVAL = 18000; // 18 seconds - balanced for standard view
+        
+        updateInterval = setInterval(() => {
+            // Only send request if connection is still open
+            if (unitSocket.readyState === WebSocket.OPEN) {
+                // For background tabs, skip some requests to reduce server load
+                // but still maintain reasonable update frequency
+                const shouldSkipRequest = !isTabVisible && Math.random() < 0.25; // Skip 25% of requests when hidden
+                
+                if (!shouldSkipRequest) {
+                    sendDataRequest();
+                } else {
+                    console.log(`[STANDARD OPTIMIZATION] Skipping background request for ${unitName}`);
+                }
+            } else {
+                console.log(`[STANDARD ERROR] Connection lost for ${unitName}, clearing interval`);
                 clearInterval(updateInterval);
-                return;
+                updateInterval = null;
             }
-            
-            // Force immediate update when tab recently became visible
-            const timeSinceVisibilityChange = Date.now() - lastVisibilityChange;
-            if (isTabVisible && timeSinceVisibilityChange < 5000) { // Within 5 seconds of becoming visible
-                console.log(`[STANDARD OPTIMIZER] Tab just became visible, forcing fresh data for "${unitName}"`);
-                sendDataRequest();
-            }
-        }, 30000); // Check every 30 seconds (less aggressive monitoring)
+        }, UPDATE_INTERVAL);
 
-        // Store the optimizer for cleanup
-        unitSocket._visibilityOptimizer = visibilityOptimizer;
-
-        console.log(`[STANDARD WEBSOCKET] Set up ${updateIntervalMs}ms interval updates for "${unitName}" with visibility optimization`);
+        console.log(`[STANDARD WEBSOCKET] Connected to ${unitName} with optimized ${UPDATE_INTERVAL}ms interval`);
     };
     
     unitSocket.onmessage = (event) => {
@@ -996,7 +994,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 return;
             }
             
-            // FIXED: Allow data processing during shift change but with careful handling
+            // IMPROVED: Allow data processing during shift change but with careful handling
             if (isShiftChangeInProgress) {
                 console.log(`[SHIFT CHANGE] Processing data carefully during shift change for "${unitName}"`);
                 // Continue processing but will defer UI updates
@@ -1055,11 +1053,13 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                     console.log(`STANDARD VIEW: Calling initial callback for "${unitName}"`);
                     callback(data.models || data);
                 } else {
-                    // If it's a subsequent update, update UI directly
+                    // If it's a subsequent update, update UI directly with batched rendering
                     console.log(`[TABLE UPDATE] Updating UI for subsequent data for "${unitName}"`);
-                    updateUI();
-                    updateLastUpdateTime();
-                    console.log(`[TABLE UPDATE] UI update completed for "${unitName}"`);
+                    requestAnimationFrame(() => {
+                        updateUI();
+                        updateLastUpdateTime();
+                        console.log(`[TABLE UPDATE] UI update completed for "${unitName}"`);
+                    });
                 }
             }
             console.log('=== END STANDARD VIEW DEBUG ===');
@@ -1083,15 +1083,12 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     
     unitSocket.onerror = (error) => {
         console.error(`WebSocket error for "${unitName}":`, error);
+        reconnectAttempts++;
         
-        // Clear the update interval and visibility optimizer if there's an error
+        // Clean up intervals
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
-        }
-        if (unitSocket._visibilityOptimizer) {
-            clearInterval(unitSocket._visibilityOptimizer);
-            unitSocket._visibilityOptimizer = null;
         }
         
         // Count as completed but with no data
@@ -1103,15 +1100,13 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     };
     
     unitSocket.onclose = (event) => {
-        // Clear the update interval and visibility optimizer if the socket is closed
+        // Clean up intervals
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
-        if (unitSocket._visibilityOptimizer) {
-            clearInterval(unitSocket._visibilityOptimizer);
-            unitSocket._visibilityOptimizer = null;
-        }
+        
+        console.log(`[STANDARD WEBSOCKET] Connection closed for "${unitName}" (code: ${event.code})`);
         
         // Make sure we call callback if we haven't received initial data yet
         if (!hasReceivedInitialData) {
@@ -1121,26 +1116,27 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
         
-        if (!event.wasClean && reconnectAttempts < maxReconnectAttempts) {
-            reconnectAttempts++;
-            
-            // IMPROVED: Use consistent reconnection strategy regardless of tab visibility
-            // Fast reconnection is MORE important for background tabs to maintain real-time updates
-            const reconnectDelay = 1000 * reconnectAttempts; // Standard progressive delay for all cases
-                
-            console.log(`[RECONNECT] Waiting ${reconnectDelay}ms before reconnect attempt (visible: ${isTabVisible})`);
+        // Auto-reconnect for unexpected closures
+        if (event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) { // 1000 = normal closure
+            const reconnectDelay = Math.min(3000 * Math.pow(1.5, reconnectAttempts), 20000); // Exponential backoff, max 20s
+            console.log(`[STANDARD RECONNECT] Will attempt to reconnect ${unitName} in ${reconnectDelay}ms (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
             
             setTimeout(() => {
-                connectWebSocket(unitName, startTime, endTime, (data) => {
-                    // Only process data on reconnect, don't call original callback
-                    if (data && data.length > 0) {
-                        processUnitData(unitName, data);
-                        updateUI();
-                        updateLastUpdateTime();
-                    }
-                });
+                if (!unitSockets[unitName] || unitSockets[unitName].readyState === WebSocket.CLOSED) {
+                    console.log(`[STANDARD RECONNECT] Attempting to reconnect ${unitName}`);
+                    connectWebSocket(unitName, startTime, endTime, (data) => {
+                        // Only process data on reconnect, don't call original callback
+                        if (data && data.length > 0) {
+                            processUnitData(unitName, data);
+                            requestAnimationFrame(() => {
+                                updateUI();
+                                updateLastUpdateTime();
+                            });
+                        }
+                    });
+                }
             }, reconnectDelay);
-        } else if (!event.wasClean && reconnectAttempts >= maxReconnectAttempts) {
+        } else if (event.code !== 1000 && reconnectAttempts >= maxReconnectAttempts) {
             console.error(`Failed to connect to WebSocket for "${unitName}" after ${maxReconnectAttempts} attempts`);
         }
     };
@@ -1315,12 +1311,12 @@ function handleVisibilityChange() {
         // Force data refresh for all active WebSocket connections
         forceDataRefreshAllUnits();
         
-        // Force another UI update after data refresh
-        setTimeout(() => {
+        // Defer UI update to next frame to avoid blocking
+        requestAnimationFrame(() => {
             updateTimeDisplay();
             updateLastUpdateTime();
             console.log('[VISIBILITY] Forced UI update after data refresh');
-        }, 100);
+        });
     }
 }
 
@@ -1340,6 +1336,7 @@ function forceDataRefreshAllUnits() {
         console.log(`[VISIBILITY] EndTime updated in forceRefresh: ${oldEndTime} → ${endTime.toISOString()}`);
     }
     
+    let refreshCount = 0;
     for (const unitName in unitSockets) {
         const socket = unitSockets[unitName];
         if (socket && socket.readyState === WebSocket.OPEN && !socket._isInvalid) {
@@ -1359,11 +1356,20 @@ function forceDataRefreshAllUnits() {
                 working_mode: params.working_mode
             });
             
-            showUpdatingIndicator();
             socket.send(JSON.stringify(params));
+            refreshCount++;
         } else {
             console.log(`[VISIBILITY] Skipping ${unitName} - socket not ready (state: ${socket ? socket.readyState : 'null'})`);
         }
+    }
+    
+    // Show update indicator only if we actually sent refresh requests
+    if (refreshCount > 0) {
+        showUpdatingIndicator();
+        // Auto-hide after longer delay for batch operations
+        setTimeout(() => {
+            updateIndicator.classList.add('hidden');
+        }, 2000);
     }
 }
 
@@ -1372,26 +1378,35 @@ function startOptimizedIntervals() {
     // Clear any existing intervals
     stopOptimizedIntervals();
     
-    // Shift change check (10 seconds normally, but more aggressive when visible)
-    const shiftCheckFrequency = isTabVisible ? 10000 : 30000; // 10s when visible, 30s when hidden
+    // IMPROVED: Use consistent shift check frequency to prevent timing drift
+    // Reduce frequency but avoid variable intervals that cause synchronization issues
+    const SHIFT_CHECK_INTERVAL = 15000; // 15 seconds - consistent for all visibility states
     shiftCheckInterval = setInterval(() => {
         if (checkForNewTimePeriod()) {
             console.log('Standard view: Shift change detected, updating time period...');
             updateTimePeriod();
         }
-    }, shiftCheckFrequency);
+    }, SHIFT_CHECK_INTERVAL);
     
-    // Visibility check to adapt intervals
+    // OPTIMIZED: Reduce visibility check frequency to reduce CPU overhead
+    // Most visibility changes are detected by the built-in event listener
     visibilityCheckInterval = setInterval(() => {
         const currentVisible = !document.hidden;
         if (currentVisible !== isTabVisible) {
-            // Visibility state changed, restart intervals with appropriate frequency
-            console.log('[VISIBILITY] Restarting intervals due to visibility change');
-            startOptimizedIntervals();
+            // Visibility state changed, handle it
+            console.log('[VISIBILITY] Detected visibility change via monitoring');
+            isTabVisible = currentVisible;
+            lastVisibilityChange = Date.now();
+            
+            // Force refresh when tab becomes visible instead of restarting intervals
+            if (isTabVisible) {
+                console.log('[VISIBILITY] Tab became visible - forcing immediate refresh');
+                forceDataRefreshAllUnits();
+            }
         }
-    }, 5000); // Check every 5 seconds
+    }, 10000); // Reduced to every 10 seconds for lower overhead
     
-    console.log(`[INTERVALS] Started optimized intervals - tab visible: ${isTabVisible}`);
+    console.log(`[INTERVALS] Started optimized intervals with ${SHIFT_CHECK_INTERVAL}ms shift checks - tab visible: ${isTabVisible}`);
 }
 
 function stopOptimizedIntervals() {
@@ -1410,12 +1425,13 @@ function startTimeUpdates() {
     // Stop any existing timer
     stopTimeUpdates();
     
-    // Update time display every second for live data
+    // OPTIMIZED: Update time display every 3 seconds instead of every second
+    // This reduces CPU overhead while still keeping the display reasonably current
     clockUpdateInterval = setInterval(() => {
         updateTimeDisplay();
-    }, 1000);
+    }, 3000);
     
-    console.log('[STANDARD TIME] Started live time updates');
+    console.log('[STANDARD TIME] Started optimized time updates (3s interval)');
 }
 
 function stopTimeUpdates() {

@@ -107,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.addEventListener('visibilitychange', handleVisibilityChange);
     startVisibilityCheck();
     
-    // Start clock updates for live data display
+    // Start clock updates for live data
     startTimeUpdates();
 
     // Parse URL parameters
@@ -409,12 +409,12 @@ function handleVisibilityChange() {
         // Force data refresh for all active WebSocket connections
         forceDataRefreshAllUnits();
 
-        // Force another UI update after data refresh
-        setTimeout(() => {
+        // Defer UI update to next frame to avoid blocking
+        requestAnimationFrame(() => {
             updateTimeDisplay();
             updateLastUpdateTime();
             console.log('[REPORT VISIBILITY] Forced UI update after data refresh');
-        }, 100);
+        });
     }
 }
 
@@ -422,7 +422,9 @@ function startVisibilityCheck() {
     // Stop any existing check
     stopVisibilityCheck();
     
-    // Start visibility monitoring to handle browser throttling
+    // OPTIMIZED: Reduce monitoring frequency to reduce CPU overhead
+    // Most visibility changes are detected by the built-in event listener
+    // This is just a backup check for edge cases
     visibilityCheckInterval = setInterval(() => {
         const currentVisible = !document.hidden;
         if (currentVisible !== isTabVisible) {
@@ -430,9 +432,9 @@ function startVisibilityCheck() {
             console.log('[REPORT VISIBILITY] Detected visibility change via monitoring');
             handleVisibilityChange();
         }
-    }, 5000); // Check every 5 seconds
+    }, 10000); // Reduced to every 10 seconds for lower overhead
 
-    console.log('[REPORT VISIBILITY] Started background tab optimization');
+    console.log('[REPORT VISIBILITY] Started optimized background tab monitoring');
 }
 
 function stopVisibilityCheck() {
@@ -447,12 +449,13 @@ function startTimeUpdates() {
     // Stop any existing timer
     stopTimeUpdates();
     
-    // Update time display every second for live data
+    // OPTIMIZED: Update time display every 5 seconds instead of every second
+    // This reduces CPU overhead while still keeping the display reasonably current
     clockUpdateInterval = setInterval(() => {
         updateTimeDisplay();
-    }, 1000);
+    }, 5000);
     
-    console.log('[REPORT TIME] Started live time updates');
+    console.log('[REPORT TIME] Started optimized time updates (5s interval)');
 }
 
 function stopTimeUpdates() {
@@ -467,6 +470,7 @@ function forceDataRefreshAllUnits() {
     console.log('[REPORT VISIBILITY] Current endTime:', endTime.toISOString());
     console.log('[REPORT VISIBILITY] Current time:', new Date().toISOString());
 
+    let refreshCount = 0;
     for (const unitName in unitSockets) {
         const socket = unitSockets[unitName];
         if (socket && socket.readyState === WebSocket.OPEN) {
@@ -486,15 +490,20 @@ function forceDataRefreshAllUnits() {
                 working_mode: params.working_mode
             });
 
-            // Show update indicator
-            if (updateIndicator) {
-                updateIndicator.classList.remove('hidden');
-            }
-
             socket.send(JSON.stringify(params));
+            refreshCount++;
         } else {
             console.log(`[REPORT VISIBILITY] Skipping ${unitName} - socket not ready (state: ${socket ? socket.readyState : 'null'})`);
         }
+    }
+    
+    // Show update indicator only if we actually sent refresh requests
+    if (refreshCount > 0 && updateIndicator) {
+        updateIndicator.classList.remove('hidden');
+        // Auto-hide after longer delay for batch operations
+        setTimeout(() => {
+            updateIndicator.classList.add('hidden');
+        }, 1500);
     }
 }
 
@@ -540,16 +549,34 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     
     let hasReceivedInitialData = false;
     let updateInterval = null;
+    let reconnectAttempts = 0;
+    let lastRequestTime = 0;
+    
+    // Pre-calculate reusable values to reduce overhead
+    const workingMode = workingModeValue || 'mode1';
+    const startTimeISO = startTime.toISOString();
     
     function sendDataRequest() {
         if (unitSocket.readyState === WebSocket.OPEN) {
-            // For live data, use current time as end time
-            const currentEndTime = new Date();
+            const now = Date.now();
+            
+            // Throttle requests to prevent excessive calls (minimum 10 seconds between requests)
+            if (now - lastRequestTime < 10000) {
+                console.log(`[REPORT THROTTLE] Skipping request for ${unitName} - too soon (${now - lastRequestTime}ms ago)`);
+                return;
+            }
+            
+            lastRequestTime = now;
+            
+            // For live data, use current time as end time (optimized)
+            const currentEndTime = new Date(now);
             const params = {
-                start_time: startTime.toISOString(),
+                start_time: startTimeISO, // Reuse pre-calculated value
                 end_time: currentEndTime.toISOString(),
-                working_mode: workingModeValue || 'mode1'
+                working_mode: workingMode // Reuse pre-calculated value
             };
+            
+            console.log(`[REPORT REQUEST] Sending data request for ${unitName}`);
             unitSocket.send(JSON.stringify(params));
         }
     }
@@ -564,33 +591,32 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     }, 10000);
     
     unitSocket.onopen = () => {
+        reconnectAttempts = 0;
         sendDataRequest();
         
-        // AGGRESSIVE REAL-TIME UPDATES: Use shorter intervals to overcome browser throttling
-        const getOptimalUpdateInterval = () => {
-            // Use 15 seconds for all cases - aggressive enough to overcome browser throttling
-            // while still being reasonable for server load
-            return 15000;
-        };
-
-        updateInterval = setInterval(sendDataRequest, getOptimalUpdateInterval());
+        // OPTIMIZED INTERVAL SYSTEM
+        const UPDATE_INTERVAL = 20000; // 20 seconds - balanced approach
         
-        // Add adaptive interval monitoring for even better background tab handling
-        const adaptiveCheck = setInterval(() => {
-            const optimalInterval = getOptimalUpdateInterval();
-            // For report views, we want consistent updates regardless of visibility
-            // So we don't change intervals, but we do monitor for connection health
-            if (unitSocket.readyState !== WebSocket.OPEN) {
-                console.log(`[REPORT ADAPTIVE] Connection lost for ${unitName}, will reconnect`);
-                clearInterval(adaptiveCheck);
+        updateInterval = setInterval(() => {
+            // Only send request if connection is still open and tab is active
+            if (unitSocket.readyState === WebSocket.OPEN) {
+                // For background tabs, skip some requests to reduce server load
+                // but still maintain reasonable update frequency
+                const shouldSkipRequest = !isTabVisible && Math.random() < 0.3; // Skip 30% of requests when hidden
+                
+                if (!shouldSkipRequest) {
+                    sendDataRequest();
+                } else {
+                    console.log(`[REPORT OPTIMIZATION] Skipping background request for ${unitName}`);
+                }
+            } else {
+                console.log(`[REPORT ERROR] Connection lost for ${unitName}, clearing interval`);
                 clearInterval(updateInterval);
+                updateInterval = null;
             }
-        }, 5000);
-
-        // Store the adaptive check for cleanup
-        unitSocket._adaptiveCheck = adaptiveCheck;
+        }, UPDATE_INTERVAL);
         
-        console.log(`[REPORT WEBSOCKET] Set up aggressive real-time updates for "${unitName}" with ${getOptimalUpdateInterval()}ms interval`);
+        console.log(`[REPORT WEBSOCKET] Connected to ${unitName} with optimized ${UPDATE_INTERVAL}ms interval`);
     };
     
     unitSocket.onmessage = (event) => {
@@ -632,17 +658,20 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                     clearTimeout(connectionTimeout);
                     callback(data.models || data);
                 } else {
-                    // Show update indicator
-                    updateIndicator.classList.remove('hidden');
-                    
-                    // Update charts with new data
-                    updateCharts();
-                    updateLastUpdateTime();
-                    
-                    // Hide update indicator after a brief moment
-                    setTimeout(() => {
-                        updateIndicator.classList.add('hidden');
-                    }, 1000);
+                    // Batch UI updates to prevent excessive redraws
+                    requestAnimationFrame(() => {
+                        // Show update indicator
+                        updateIndicator.classList.remove('hidden');
+                        
+                        // Update charts with new data
+                        updateCharts();
+                        updateLastUpdateTime();
+                        
+                        // Hide update indicator after a brief moment
+                        setTimeout(() => {
+                            updateIndicator.classList.add('hidden');
+                        }, 800);
+                    });
                 }
             }
         } catch (error) {
@@ -658,14 +687,14 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     
     unitSocket.onerror = (error) => {
         console.error(`WebSocket error for "${unitName}":`, error);
+        reconnectAttempts++;
+        
+        // Clean up intervals
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
-        if (unitSocket._adaptiveCheck) {
-            clearInterval(unitSocket._adaptiveCheck);
-            unitSocket._adaptiveCheck = null;
-        }
+        
         if (!hasReceivedInitialData) {
             hasReceivedInitialData = true;
             clearTimeout(connectionTimeout);
@@ -675,20 +704,36 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     };
     
     unitSocket.onclose = (event) => {
+        // Clean up intervals
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
-        if (unitSocket._adaptiveCheck) {
-            clearInterval(unitSocket._adaptiveCheck);
-            unitSocket._adaptiveCheck = null;
-        }
-        console.log(`[REPORT WEBSOCKET] Connection closed for "${unitName}"`);
+        
+        console.log(`[REPORT WEBSOCKET] Connection closed for "${unitName}" (code: ${event.code})`);
+        
         if (!hasReceivedInitialData) {
             hasReceivedInitialData = true;
             clearTimeout(connectionTimeout);
             unitData[unitName] = { models: [], summary: null };
             callback([]);
+        }
+        
+        // Auto-reconnect for unexpected closures
+        if (event.code !== 1000 && reconnectAttempts < 5) { // 1000 = normal closure
+            const reconnectDelay = Math.min(5000 * Math.pow(2, reconnectAttempts), 30000); // Exponential backoff, max 30s
+            console.log(`[REPORT RECONNECT] Will attempt to reconnect ${unitName} in ${reconnectDelay}ms (attempt ${reconnectAttempts + 1}/5)`);
+            
+            setTimeout(() => {
+                if (!unitSockets[unitName] || unitSockets[unitName].readyState === WebSocket.CLOSED) {
+                    console.log(`[REPORT RECONNECT] Attempting to reconnect ${unitName}`);
+                    connectWebSocket(unitName, startTime, endTime, () => {
+                        // Force immediate chart update after reconnection
+                        updateCharts();
+                        updateLastUpdateTime();
+                    });
+                }
+            }, reconnectDelay);
         }
     };
 }
