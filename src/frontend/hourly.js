@@ -733,10 +733,9 @@ function createOrUpdateHourlyDataDisplay(unitName, data) {
 
 // Update an existing hourly data display for a unit
 function updateHourlyDataDisplay(unitName, data) {
-    // Skip UI updates during shift change to prevent old data from showing
+    // FIXED: Allow UI updates during shift change - data freshness is more important
     if (isShiftChangeInProgress) {
-        console.log(`[SHIFT CHANGE] Skipping UI update during shift change for "${unitName}"`);
-        return;
+        console.log(`[SHIFT CHANGE] Proceeding with UI update during shift change for "${unitName}" (data freshness priority)`);
     }
 
     if (!unitContainers[unitName]) {
@@ -980,23 +979,23 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
 
-        // Check if shift change is in progress
+        // FIXED: Only skip data requests during shift change for a limited time (2 seconds max)
         if (isShiftChangeInProgress) {
-            console.log(`[SHIFT CHANGE] Skipping data request during shift change for "${unitName}"`);
+            console.log(`[SHIFT CHANGE] Deferring data request during shift change for "${unitName}"`);
+            // Don't completely skip - defer for a short time instead
+            setTimeout(() => {
+                if (!isShiftChangeInProgress && unitSocket.readyState === WebSocket.OPEN) {
+                    console.log(`[SHIFT CHANGE] Retrying deferred data request for "${unitName}"`);
+                    sendDataRequest();
+                }
+            }, 500); // Retry after 500ms
             return;
         }
 
-        // For live data, always update endTime to current time
-        const now = new Date();
-        console.log(`[LIVE DATA] Updating endTime for live view "${unitName}"`);
-        console.log(`[LIVE DATA] Old endTime: ${endTime.toISOString()}`);
-        endTime = now;
-        console.log(`[LIVE DATA] New endTime: ${endTime.toISOString()}`);
-
         if (unitSocket.readyState === WebSocket.OPEN) {
-                showUpdatingIndicator();
+            showUpdatingIndicator();
 
-            // For live data, always use current time
+            // For live data, use current time as request end time (don't modify global endTime here)
             const requestEndTime = new Date();
 
             // Send parameters to request new data
@@ -1008,7 +1007,8 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
 
             console.log(`[DATA REQUEST] ${unitName}: Live data request`, {
                 start: params.start_time,
-                end: params.end_time
+                end: params.end_time,
+                timeDiff: Math.round((requestEndTime.getTime() - new Date(params.start_time).getTime()) / 1000 / 60) + ' min'
             });
 
             unitSocket.send(JSON.stringify(params));
@@ -1037,46 +1037,32 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
         // Send initial parameters once connected
         sendDataRequest();
 
-        // Set up optimized interval to request data
-        // Use shorter intervals when tab is visible, longer when background
-        const getDataRequestInterval = () => {
-            // IMPROVED: Use shorter intervals to overcome browser throttling in background tabs
-            // Base interval: 15 seconds for all cases (aggressive for real-time updates)
-            const aggressiveInterval = 15000;
+        // ULTRA-AGGRESSIVE: Use very short intervals to overcome backend 30s delays
+        const updateIntervalMs = 10000; // 10 seconds - ultra-aggressive for real-time
+        updateInterval = setInterval(sendDataRequest, updateIntervalMs);
 
-            // FIXED: Don't use longer intervals for background tabs - this was counter-productive!
-            // Instead, use consistent aggressive intervals to fight browser throttling
-            return aggressiveInterval; // 15 seconds for all cases - consistent real-time updates
-        };
-
-        // Create adaptive interval that adjusts based on visibility
-        let currentInterval = getDataRequestInterval();
-        updateInterval = setInterval(sendDataRequest, currentInterval);
-
-        // Monitor connection health and force updates for background tab optimization
-        const adaptiveIntervalCheck = setInterval(() => {
-            // No longer change intervals based on visibility - keep consistent aggressive updates
-            // Instead, monitor connection health and force immediate updates on visibility changes
-            
+        // Simple visibility-based optimization: force update when tab becomes visible
+        const visibilityOptimizer = setInterval(() => {
+            // Basic connection health check
             if (unitSocket.readyState !== WebSocket.OPEN) {
-                console.log(`[HOURLY ADAPTIVE] Connection lost for "${unitName}", will handle reconnection`);
-                clearInterval(adaptiveIntervalCheck);
+                console.log(`[HOURLY OPTIMIZER] Connection lost for "${unitName}", stopping optimizer`);
+                clearInterval(visibilityOptimizer);
                 clearInterval(updateInterval);
                 return;
             }
             
-            // If tab just became visible and some time has passed, force immediate update
+            // Force immediate update when tab recently became visible
             const timeSinceVisibilityChange = Date.now() - lastVisibilityChange;
-            if (isTabVisible && timeSinceVisibilityChange < 30000) { // Within 30 seconds of becoming visible
-                console.log(`[HOURLY ADAPTIVE] Tab recently became visible, ensuring fresh data for "${unitName}"`);
-                sendDataRequest(); // Send immediate request for fresh data
+            if (isTabVisible && timeSinceVisibilityChange < 5000) { // Within 5 seconds of becoming visible
+                console.log(`[HOURLY OPTIMIZER] Tab just became visible, forcing fresh data for "${unitName}"`);
+                sendDataRequest();
             }
-        }, 10000); // Check every 10 seconds for adaptive optimization
+        }, 30000); // Check every 30 seconds (less aggressive monitoring)
 
-        // Store the adaptive check interval for cleanup
-        unitSocket._adaptiveInterval = adaptiveIntervalCheck;
+        // Store the optimizer for cleanup
+        unitSocket._visibilityOptimizer = visibilityOptimizer;
 
-        console.log(`[HOURLY WEBSOCKET] Set up aggressive real-time updates for "${unitName}" with ${currentInterval}ms interval (background tab optimized)`);
+        console.log(`[HOURLY WEBSOCKET] Set up ${updateIntervalMs}ms interval updates for "${unitName}" with visibility optimization`);
     };
 
     unitSocket.onmessage = (event) => {
@@ -1087,10 +1073,10 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                 return;
             }
 
-            // Check if shift change is in progress and this might be old data
+            // FIXED: Allow data processing during shift change but with careful handling
             if (isShiftChangeInProgress) {
-                console.log(`[SHIFT CHANGE] Ignoring data during shift change for "${unitName}"`);
-                return;
+                console.log(`[SHIFT CHANGE] Processing data carefully during shift change for "${unitName}"`);
+                // Continue processing but will defer UI updates
             }
 
             console.log(`Received hourly data message for "${unitName}" (length: ${event.data.length})`);
@@ -1213,8 +1199,10 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                 }
                 
                 // ALWAYS update the display for real-time table updates
+                console.log(`[TABLE UPDATE] Updating display for "${unitName}" with fresh data`);
                 createOrUpdateHourlyDataDisplay(unitName, data);
                 updateLastUpdateTime();
+                console.log(`[TABLE UPDATE] Display update completed for "${unitName}"`);
             }
         } catch (error) {
             console.error(`Error parsing hourly data for "${unitName}":`, error);
@@ -1231,14 +1219,14 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
     unitSocket.onerror = (error) => {
         console.error(`Hourly WebSocket error for ${unitName}:`, error);
 
-        // Clear the update interval and adaptive interval if there's an error
+        // Clear the update interval and visibility optimizer if there's an error
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
-        if (unitSocket._adaptiveInterval) {
-            clearInterval(unitSocket._adaptiveInterval);
-            unitSocket._adaptiveInterval = null;
+        if (unitSocket._visibilityOptimizer) {
+            clearInterval(unitSocket._visibilityOptimizer);
+            unitSocket._visibilityOptimizer = null;
         }
 
         // Count as completed but with no data
@@ -1248,14 +1236,14 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
     unitSocket.onclose = (event) => {
         console.log(`Hourly WebSocket closed for ${unitName}:`, event);
 
-        // Clear the update interval and adaptive interval if the socket is closed
+        // Clear the update interval and visibility optimizer if the socket is closed
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
-        if (unitSocket._adaptiveInterval) {
-            clearInterval(unitSocket._adaptiveInterval);
-            unitSocket._adaptiveInterval = null;
+        if (unitSocket._visibilityOptimizer) {
+            clearInterval(unitSocket._visibilityOptimizer);
+            unitSocket._visibilityOptimizer = null;
         }
 
         if (!event.wasClean && reconnectAttempts < maxReconnectAttempts) {

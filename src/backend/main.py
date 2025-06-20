@@ -611,7 +611,8 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                 else:
                     break
                     
-                await asyncio.sleep(30)
+                # FIXED: Much shorter sleep for real-time standard updates  
+                await asyncio.sleep(10)  # 10 seconds instead of 30 for responsive real-time updates
             except WebSocketDisconnect:
                 break
             except ValueError as e:
@@ -845,7 +846,8 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 else:
                     break
                     
-                await asyncio.sleep(30)
+                # FIXED: Much shorter sleep for real-time hourly updates
+                await asyncio.sleep(10)  # 10 seconds instead of 30 for responsive real-time updates
             except WebSocketDisconnect:
                 break
             except ValueError as e:
