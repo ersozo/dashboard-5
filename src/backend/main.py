@@ -748,21 +748,28 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 
                 # Determine if this is live data to use current_time for the last hour
                 is_live_data = False
+                actual_end_time_for_hourly = end_time
                 if current_time:
                     time_difference = current_time - end_time
                     five_minutes = timedelta(minutes=5)
                     is_live_data = time_difference <= five_minutes
+                    
+                    # FIXED: For live data, extend the processing to current_time to include current hour
+                    if is_live_data:
+                        actual_end_time_for_hourly = current_time
+                        print(f"[HOURLY DEBUG] Live data detected - extending end_time from {end_time} to {current_time}")
                 
-                while current_hour < end_time:
+                while current_hour < actual_end_time_for_hourly:
                     hour_end = current_hour + timedelta(hours=1)
                     
                     # For the current hour in live data, use current_time as hour_end
                     if is_live_data and current_time > current_hour and current_time < hour_end:
                         # This is the current hour in live data - use current_time as hour_end
                         hour_end = current_time
+                        print(f"[HOURLY DEBUG] Current hour detected: {current_hour.strftime('%H:%M')} - using current_time as hour_end: {hour_end.strftime('%H:%M')}")
                     else:
-                        # For historical data or completed hours, use the regular hour boundary or end_time
-                        hour_end = min(hour_end, end_time)
+                        # For historical data or completed hours, use the regular hour boundary or actual_end_time_for_hourly
+                        hour_end = min(hour_end, actual_end_time_for_hourly)
                     
                     # Get data for this specific hour
                     hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
@@ -813,7 +820,15 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                         'theoretical_qty': hour_theoretical_qty
                     })
                     
-                    current_hour = hour_end
+                    print(f"[HOURLY DEBUG] Added hour: {current_hour.strftime('%H:%M')}-{hour_end.strftime('%H:%M')} | Success: {hour_success} | Fail: {hour_fail}")
+                    
+                    # Move to next hour - but for live data current hour, advance to the next hour boundary
+                    if is_live_data and hour_end == current_time:
+                        # For current hour in live data, move to next hour boundary to prevent infinite loop
+                        current_hour = current_hour + timedelta(hours=1)
+                        print(f"[HOURLY DEBUG] Current hour processed, moving to next hour boundary: {current_hour.strftime('%H:%M')}")
+                    else:
+                        current_hour = hour_end
                 
                 # Calculate corrected total theoretical quantity (sum of hourly calculations)
                 total_theoretical_qty = sum(hour['theoretical_qty'] for hour in hourly_data)
