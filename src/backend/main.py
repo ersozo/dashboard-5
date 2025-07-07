@@ -609,37 +609,61 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                 # Check if connection is still open before sending
                 if websocket.client_state.name == 'CONNECTED':
                     await websocket.send_json(response_data)
+                    print(f"[STANDARD SUCCESS] Sent response to {unit_name}")
                 else:
+                    print(f"[STANDARD WARNING] Connection closed before sending response to {unit_name}")
                     break
                     
                 # FIXED: Much shorter sleep for real-time standard updates  
                 await asyncio.sleep(10)  # 10 seconds instead of 30 for responsive real-time updates
             except WebSocketDisconnect:
+                print(f"[STANDARD INFO] WebSocket disconnected for {unit_name}")
                 break
             except ValueError as e:
-                print(f"[STANDARD DEBUG] ValueError: {e}")
                 try:
                     error_response = {"error": str(e)}
-                    await websocket.send_json(error_response)
-                except Exception as e:
+                    print(f"[STANDARD ERROR] Value error for {unit_name}: {str(e)}")
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json(error_response)
+                except Exception:
                     break
             except Exception as e:
                 # Filter out normal WebSocket connection closures - these are expected
                 error_msg = str(e).lower()
-                if ('keepalive ping timeout' not in error_msg and '1011' not in error_msg and 
-                    '1005' not in error_msg and 'no status received' not in error_msg):
-                    print(f"[STANDARD DEBUG] Exception: {e}")
-                else:
+                if ('keepalive ping timeout' in error_msg or '1011' in error_msg or 
+                    'connection closed' in error_msg or '1005' in error_msg or 
+                    'no status received' in error_msg):
                     # Normal WebSocket connection closure - log at lower level
-                    print(f"[STANDARD INFO] WebSocket connection closed (normal): {e}")
+                    print(f"[STANDARD INFO] WebSocket connection closed for {unit_name} (normal): {str(e)}")
+                    break
+                else:
+                    # Actual error - log with full traceback and send error response
+                    print(f"[STANDARD ERROR] Unexpected error in WebSocket handler for {unit_name}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
                 
                 try:
-                    error_response = {"error": "An unexpected error occurred"}
-                    await websocket.send_json(error_response)
+                    error_response = {"error": f"Server error occurred: {str(e)}"}
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json(error_response)
+                        print(f"[STANDARD ERROR] Sent error response to {unit_name}")
                 except Exception as send_err:
+                    # Filter out normal connection closed errors for send failures too
+                    send_error_msg = str(send_err).lower()
+                    if ('keepalive ping timeout' not in send_error_msg and '1011' not in send_error_msg and 
+                        'connection closed' not in send_error_msg and '1005' not in send_error_msg and 
+                        'no status received' not in send_error_msg):
+                        print(f"[STANDARD ERROR] Failed to send error response to {unit_name}: {str(send_err)}")
                     break
     except Exception as e:
-        print(f"Outer exception in standard WebSocket handler: {e}")
+        # Filter out normal WebSocket connection closures for outer exceptions too
+        error_msg = str(e).lower()
+        if ('keepalive ping timeout' in error_msg or '1011' in error_msg or 
+            'connection closed' in error_msg or '1005' in error_msg or 
+            'no status received' in error_msg):
+            print(f"[STANDARD INFO] Outer WebSocket connection closed (normal): {e}")
+        else:
+            print(f"Outer exception in standard WebSocket handler: {e}")
     finally:
         manager.disconnect(websocket, 'standard')
 
@@ -890,18 +914,31 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 # Check if connection is still open before sending
                 if websocket.client_state.name == 'CONNECTED':
                     await websocket.send_json(response_data)
+                    print(f"[HOURLY SUCCESS] Sent response to {unit_name} with {len(hourly_data)} hours")
                 else:
+                    print(f"[HOURLY WARNING] Connection closed before sending response to {unit_name}")
                     break
                     
                 # OPTIMIZED: Faster sleep for real-time hourly updates with caching
                 await asyncio.sleep(8)  # 8 seconds - faster with caching to reduce load
             except WebSocketDisconnect:
+                print(f"[HOURLY INFO] WebSocket disconnected for {unit_name}")
                 break
+            except json.JSONDecodeError as e:
+                try:
+                    error_response = {"error": f"Invalid JSON format: {str(e)}"}
+                    print(f"[HOURLY ERROR] JSON decode error for {unit_name}: {str(e)}")
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json(error_response)
+                except Exception:
+                    break
             except ValueError as e:
                 try:
                     error_response = {"error": str(e)}
-                    await websocket.send_json(error_response)
-                except Exception as e:
+                    print(f"[HOURLY ERROR] Value error for {unit_name}: {str(e)}")
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json(error_response)
+                except Exception:
                     break
             except Exception as e:
                 # Filter out normal WebSocket connection closures - these are expected
@@ -911,22 +948,25 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     'no status received' in error_msg):
                     # Normal WebSocket connection closure - log at lower level
                     print(f"[HOURLY INFO] WebSocket connection closed for {unit_name} (normal): {str(e)}")
+                    break
                 else:
-                    # Actual error - log with full traceback
-                    print(f"[HOURLY WEBSOCKET] Error in hourly WebSocket handler for {unit_name}: {str(e)}")
-                    import traceback
-                    traceback.print_exc()
+                    # Actual error - log with full traceback and send error response
+                    print(f"[HOURLY ERROR] Unexpected error in WebSocket handler for {unit_name}: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 
                 try:
-                    error_response = {"error": f"An unexpected error occurred: {str(e)}"}
-                    await websocket.send_json(error_response)
+                    error_response = {"error": f"Server error occurred: {str(e)}"}
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json(error_response)
+                        print(f"[HOURLY ERROR] Sent error response to {unit_name}")
                 except Exception as send_err:
                     # Filter out normal connection closed errors for send failures too
                     send_error_msg = str(send_err).lower()
                     if ('keepalive ping timeout' not in send_error_msg and '1011' not in send_error_msg and 
                         'connection closed' not in send_error_msg and '1005' not in send_error_msg and 
                         'no status received' not in send_error_msg):
-                        print(f"[HOURLY WEBSOCKET] Failed to send error response: {str(send_err)}")
+                        print(f"[HOURLY ERROR] Failed to send error response to {unit_name}: {str(send_err)}")
                     break
     except Exception as e:
         # Filter out normal WebSocket connection closures for outer exceptions too

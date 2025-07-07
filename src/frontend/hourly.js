@@ -27,6 +27,10 @@ let visibilityCheckInterval = null;
 let clockUpdateInterval = null;
 let shiftCheckInterval = null;
 
+// CRITICAL FIX: Global status monitoring system to prevent permanent freezing
+let statusMonitorInterval = null;
+let lastSuccessfulUpdate = Date.now();
+
 // Working mode configurations (same as in app.js)
 const workingModes = {
     mode1: {
@@ -382,6 +386,14 @@ function updateTimePeriod() {
         console.log('[SHIFT CHANGE] Shift change process completed');
     }, 2000);
 
+    // CRITICAL SAFETY: Force reset shift change flag after maximum timeout to prevent permanent blocking
+    setTimeout(() => {
+        if (isShiftChangeInProgress) {
+            console.warn('[SHIFT CHANGE SAFETY] Force clearing stuck isShiftChangeInProgress flag after 10 seconds');
+            isShiftChangeInProgress = false;
+        }
+    }, 10000);
+
     console.log(`[SHIFT CHANGE] ✅ COMPLETE - Now on ${newShift}`);
 }
 
@@ -444,11 +456,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // Load data for each unit
     loadHourlyData();
 
-    // Clean up WebSocket connections and intervals when page unloads
+    // Add cleanup on page unload
     window.addEventListener('beforeunload', () => {
+        stopStatusMonitoring();
         stopOptimizedIntervals();
+        
+        // Close all WebSocket connections
         for (const unitName in unitSockets) {
-            if (unitSockets[unitName]) {
+            if (unitSockets[unitName] && unitSockets[unitName].readyState === WebSocket.OPEN) {
                 unitSockets[unitName].close();
             }
         }
@@ -466,6 +481,12 @@ function createLastUpdateDisplay() {
 // Update the last update time display
 function updateLastUpdateTime() {
     if (lastUpdateDisplay) {
+        // CRITICAL FIX: Clear the updating timeout when successful update occurs
+        if (window.updatingTimeout) {
+            clearTimeout(window.updatingTimeout);
+            window.updatingTimeout = null;
+        }
+        
         const now = new Date();
         const hours = String(now.getHours()).padStart(2, '0');
         const minutes = String(now.getMinutes()).padStart(2, '0');
@@ -490,6 +511,20 @@ function showUpdatingIndicator() {
             lastUpdateDisplay.innerHTML = 'Güncelleniyor...';
             lastUpdateDisplay.classList.remove('bg-gray-800');
             lastUpdateDisplay.classList.add('bg-blue-600');
+        
+        // CRITICAL FIX: Add timeout to prevent permanent "Güncelleniyor..." status
+        // Clear any existing timeout
+        if (window.updatingTimeout) {
+            clearTimeout(window.updatingTimeout);
+        }
+        
+        // Set timeout to revert status if no update received
+        window.updatingTimeout = setTimeout(() => {
+            if (lastUpdateDisplay && lastUpdateDisplay.innerHTML === 'Güncelleniyor...') {
+                console.warn('[STATUS FIX] Updating indicator timed out - reverting to last update time');
+                updateLastUpdateTime();
+            }
+        }, 15000); // 15 seconds timeout for updating status
     }
 }
 
@@ -572,6 +607,8 @@ function loadHourlyData() {
                 loadingIndicator.classList.add('hidden');
                 // Update the last update time
                 updateLastUpdateTime();
+                // Start status monitoring
+                startStatusMonitoring();
             }
         });
     });
@@ -579,10 +616,9 @@ function loadHourlyData() {
 
 // Create or update hourly data display for a unit
 function createOrUpdateHourlyDataDisplay(unitName, data) {
-    // Skip UI updates during shift change to prevent old data from showing
+    // CRITICAL FIX: Allow UI updates during shift change - data freshness is more important than avoiding flicker
     if (isShiftChangeInProgress) {
-        console.log(`[SHIFT CHANGE] Skipping UI update during shift change for "${unitName}"`);
-        return;
+        console.log(`[SHIFT CHANGE] Proceeding with UI update during shift change for "${unitName}" (data freshness priority)`);
     }
 
     if (!data) {
@@ -1004,9 +1040,9 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
 
-        // IMPROVED: Simplified shift change handling - don't defer requests unnecessarily
+        // CRITICAL FIX: Always allow data requests - data freshness is top priority
         if (isShiftChangeInProgress) {
-            console.log(`[SHIFT CHANGE] Allowing data request during shift change for "${unitName}" (data freshness priority)`);
+            console.log(`[SHIFT CHANGE] Processing data request during shift change for "${unitName}" (data freshness priority)`);
         }
 
         if (unitSocket.readyState === WebSocket.OPEN) {
@@ -1019,10 +1055,23 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             }
             
             lastRequestTime = now;
-            showUpdatingIndicator();
+                showUpdatingIndicator();
 
-            // For live data, use current time as request end time (optimized)
-            const requestEndTime = new Date(now);
+            // CRITICAL FIX: For shift-based views, always use current time to get latest hour data
+            const currentTime = new Date(now);
+            const isShiftBasedView = timePresetValue && timePresetValue.startsWith('shift');
+            
+            let requestEndTime;
+            if (isShiftBasedView) {
+                // For shift-based views, always use current time and update global endTime
+                requestEndTime = currentTime;
+                const oldEndTime = endTime.toISOString();
+                endTime = currentTime; // Update global endTime for shift-based live data
+                console.log(`[HOURLY LIVE] Shift-based view detected - extending endTime from ${oldEndTime} to ${endTime.toISOString()}`);
+            } else {
+                // For non-shift views, use original logic
+                requestEndTime = currentTime;
+            }
 
             // Send parameters to request new data
             const params = {
@@ -1031,9 +1080,32 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                 working_mode: workingMode // Reuse pre-calculated value
             };
 
-            console.log(`[HOURLY REQUEST] ${unitName}: Live data request`);
+            console.log(`[HOURLY REQUEST] ${unitName}: ${isShiftBasedView ? 'Shift-based live' : 'Live'} data request - endTime: ${requestEndTime.toISOString()}`);
 
+            try {
             unitSocket.send(JSON.stringify(params));
+                
+                // CRITICAL FIX: Set a response timeout to detect silent failures
+                if (unitSocket.responseTimeout) {
+                    clearTimeout(unitSocket.responseTimeout);
+                }
+                
+                unitSocket.responseTimeout = setTimeout(() => {
+                    console.warn(`[STATUS FIX] No response received for ${unitName} within 20 seconds - checking connection`);
+                    
+                    // Check if socket is still open but not responding
+                    if (unitSocket.readyState === WebSocket.OPEN) {
+                        console.warn(`[STATUS FIX] Socket appears open but unresponsive for ${unitName} - forcing reconnection`);
+                        unitSocket.close(1000, 'Response timeout');
+                    }
+                }, 20000); // 20 second response timeout
+            } catch (error) {
+                console.error(`[STATUS FIX] Failed to send WebSocket message for ${unitName}:`, error);
+                // Force connection reset on send error
+                if (unitSocket.readyState === WebSocket.OPEN) {
+                    unitSocket.close(1006, 'Send error');
+                }
+            }
         } else {
             console.warn(`Cannot send hourly update request - socket not open for "${unitName}", readyState: ${unitSocket.readyState}`);
             // Clear interval if socket is not open
@@ -1080,22 +1152,51 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             }
         }, UPDATE_INTERVAL);
 
+        // CRITICAL FIX: Add heartbeat mechanism to detect dead connections
+        const HEARTBEAT_INTERVAL = 60000; // 60 seconds
+        let lastHeartbeat = Date.now();
+        
+        const heartbeatInterval = setInterval(() => {
+            const now = Date.now();
+            const timeSinceLastMessage = now - lastHeartbeat;
+            
+            // If no message received for 2 minutes, force reconnection
+            if (timeSinceLastMessage > 120000) {
+                console.warn(`[STATUS FIX] No heartbeat from ${unitName} for ${Math.round(timeSinceLastMessage/1000)}s - forcing reconnection`);
+                clearInterval(heartbeatInterval);
+                if (unitSocket.readyState === WebSocket.OPEN) {
+                    unitSocket.close(1000, 'Heartbeat timeout');
+                }
+            }
+        }, HEARTBEAT_INTERVAL);
+        
+        // Store heartbeat interval for cleanup
+        unitSocket.heartbeatInterval = heartbeatInterval;
+
         console.log(`[HOURLY WEBSOCKET] Connected to ${unitName} with optimized ${UPDATE_INTERVAL}ms interval`);
     };
 
     unitSocket.onmessage = (event) => {
         try {
-            // Check if this connection is marked as invalid (from previous shift)
-            if (unitSocket._isInvalid) {
-                console.log(`[SHIFT CHANGE] Ignoring data from invalid connection for "${unitName}"`);
-                return;
+            // CRITICAL FIX: Clear response timeout when message is received
+            if (unitSocket.responseTimeout) {
+                clearTimeout(unitSocket.responseTimeout);
+                unitSocket.responseTimeout = null;
             }
+            
+            // Update heartbeat timestamp
+            lastHeartbeat = Date.now();
+            
+                    // Check if this connection is marked as invalid (from previous shift)
+        if (unitSocket._isInvalid) {
+            console.log(`[SHIFT CHANGE] Ignoring data from invalid connection for "${unitName}"`);
+            return;
+        }
 
-            // FIXED: Allow data processing during shift change but with careful handling
-            if (isShiftChangeInProgress) {
-                console.log(`[SHIFT CHANGE] Processing data carefully during shift change for "${unitName}"`);
-                // Continue processing but will defer UI updates
-            }
+        // CRITICAL FIX: Allow all data processing during shift change - data freshness is top priority
+        if (isShiftChangeInProgress) {
+            console.log(`[SHIFT CHANGE] Processing data during shift change for "${unitName}" (data freshness priority)`);
+        }
 
             console.log(`Received hourly data message for "${unitName}" (length: ${event.data.length})`);
 
@@ -1221,6 +1322,7 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                 requestAnimationFrame(() => {
                     createOrUpdateHourlyDataDisplay(unitName, data);
                     updateLastUpdateTime();
+                    markSuccessfulUpdate(); // Mark successful data processing
                     console.log(`[TABLE UPDATE] Display update completed for "${unitName}"`);
                 });
             }
@@ -1239,10 +1341,14 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
     unitSocket.onerror = (error) => {
         console.error(`Hourly WebSocket error for ${unitName}:`, error);
 
-        // Clean up intervals
+        // Clean up intervals and heartbeat
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
+        }
+        if (unitSocket.heartbeatInterval) {
+            clearInterval(unitSocket.heartbeatInterval);
+            unitSocket.heartbeatInterval = null;
         }
 
         // Count as completed but with no data
@@ -1252,13 +1358,23 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
     unitSocket.onclose = (event) => {
         console.log(`Hourly WebSocket closed for ${unitName}:`, event);
 
-        // Clean up intervals
+        // Clean up intervals and heartbeat
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
+        if (unitSocket.heartbeatInterval) {
+            clearInterval(unitSocket.heartbeatInterval);
+            unitSocket.heartbeatInterval = null;
+        }
 
-        if (!event.wasClean && reconnectAttempts < maxReconnectAttempts) {
+        // CRITICAL FIX: Treat heartbeat timeout (code 1000) as requiring reconnection
+        const isHeartbeatTimeout = event.reason && event.reason.includes('timeout');
+        const shouldReconnect = (!event.wasClean || isHeartbeatTimeout) && reconnectAttempts < maxReconnectAttempts;
+        
+        console.log(`[RECONNECT DEBUG] wasClean: ${event.wasClean}, reason: "${event.reason}", isHeartbeatTimeout: ${isHeartbeatTimeout}, shouldReconnect: ${shouldReconnect}`);
+
+        if (shouldReconnect) {
             console.log(`Attempting to reconnect for ${unitName}, attempt ${reconnectAttempts + 1}/${maxReconnectAttempts}`);
             reconnectAttempts++;
 
@@ -1281,10 +1397,12 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                     });
                 }
             }, reconnectDelay);
-        } else if (!event.wasClean && reconnectAttempts >= maxReconnectAttempts) {
+        } else if (shouldReconnect === false && reconnectAttempts >= maxReconnectAttempts) {
             console.error(`Failed to connect to WebSocket for ${unitName} after ${maxReconnectAttempts} attempts`);
             alert(`Failed to connect to ${unitName}. Please try again later.`);
             callback(null);
+        } else if (!shouldReconnect && event.wasClean && !isHeartbeatTimeout) {
+            console.log(`[CLEAN CLOSE] WebSocket closed cleanly for ${unitName} - no reconnection needed`);
         }
     };
 }
@@ -1334,9 +1452,258 @@ window.forceLiveMode = function() {
 function isDataHistorical() {
     if (!endTime) return false;
 
+    // CRITICAL FIX: For shift-based views, always treat as live data
+    const isShiftBasedView = timePresetValue && timePresetValue.startsWith('shift');
+    if (isShiftBasedView) {
+        console.log('[HOURLY LIVE] Shift-based view detected - treating as live data');
+        return false; // Always live for shift-based views
+    }
+
     const now = new Date();
     const timeDifference = now.getTime() - endTime.getTime();
     const fiveMinutesInMs = 5 * 60 * 1000;
 
     return timeDifference > fiveMinutesInMs;
 }
+
+// CRITICAL FIX: Global status monitoring system to prevent permanent freezing
+let shiftChangeStartTime = null;
+
+function startStatusMonitoring() {
+    // Clear any existing monitor
+    if (statusMonitorInterval) {
+        clearInterval(statusMonitorInterval);
+    }
+    
+    // CRITICAL: Add frequent connection health check for heartbeat timeout detection
+    const connectionHealthInterval = setInterval(() => {
+        let unhealthyConnections = 0;
+        for (const unitName in unitSockets) {
+            const socket = unitSockets[unitName];
+            
+            // Check for CLOSING or CLOSED states that might not have triggered onclose yet
+            if (!socket || socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) {
+                unhealthyConnections++;
+                console.warn(`[CONNECTION HEALTH] Unhealthy connection for ${unitName} (state: ${socket ? socket.readyState : 'null'}) - forcing immediate reconnection`);
+                
+                // Immediately clean up and reconnect
+                if (socket) {
+                    try {
+                        socket.close();
+                    } catch (e) {
+                        console.warn('Error closing socket:', e);
+                    }
+                }
+                delete unitSockets[unitName];
+                
+                // Reconnect immediately
+                setTimeout(() => {
+                    console.log(`[CONNECTION HEALTH] Emergency reconnecting ${unitName}...`);
+                    connectHourlyWebSocket(unitName, startTime, endTime, (data) => {
+                        if (data) {
+                            createOrUpdateHourlyDataDisplay(unitName, data);
+                            updateLastUpdateTime();
+                            console.log(`[CONNECTION HEALTH] Emergency reconnection successful for ${unitName}`);
+                        }
+                    });
+                }, 100 * unhealthyConnections); // Very short delay
+            }
+        }
+    }, 5000); // Check every 5 seconds for connection health
+    
+    // Store the interval for cleanup
+    window.connectionHealthInterval = connectionHealthInterval;
+    
+    statusMonitorInterval = setInterval(() => {
+        const now = Date.now();
+        const timeSinceLastUpdate = now - lastSuccessfulUpdate;
+        
+        // CRITICAL: Monitor shift change flag to prevent permanent blocking
+        if (isShiftChangeInProgress) {
+            if (!shiftChangeStartTime) {
+                shiftChangeStartTime = now;
+            } else {
+                const shiftChangeTime = now - shiftChangeStartTime;
+                if (shiftChangeTime > 15000) { // 15 seconds max for shift change
+                    console.warn(`[STATUS MONITOR] isShiftChangeInProgress stuck for ${Math.round(shiftChangeTime/1000)}s - force clearing`);
+                    isShiftChangeInProgress = false;
+                    shiftChangeStartTime = null;
+                }
+            }
+        } else {
+            shiftChangeStartTime = null;
+        }
+        
+        // Check if updating status has been stuck for too long
+        if (lastUpdateDisplay && lastUpdateDisplay.innerHTML === 'Güncelleniyor...') {
+            const stuckTime = timeSinceLastUpdate;
+            
+            if (stuckTime > 30000) { // 30 seconds stuck
+                console.warn(`[STATUS MONITOR] Updating status stuck for ${Math.round(stuckTime/1000)}s - forcing recovery`);
+                
+                // Force status update
+                updateLastUpdateTime();
+                
+                // Check WebSocket health and force reconnection if needed
+                let deadConnections = 0;
+                for (const unitName in unitSockets) {
+                    const socket = unitSockets[unitName];
+                    if (!socket || socket.readyState !== WebSocket.OPEN) {
+                        deadConnections++;
+                        console.warn(`[STATUS MONITOR] Dead connection detected for ${unitName} (state: ${socket ? socket.readyState : 'null'}) - forcing reconnection`);
+                        
+                        // Clear the dead socket first
+                        if (socket) {
+                            socket.close();
+                        }
+                        delete unitSockets[unitName];
+                        
+                        // Reconnect this unit
+                        setTimeout(() => {
+                            console.log(`[STATUS MONITOR] Reconnecting ${unitName}...`);
+                            connectHourlyWebSocket(unitName, startTime, endTime, (data) => {
+                                if (data) {
+                                    createOrUpdateHourlyDataDisplay(unitName, data);
+                                    updateLastUpdateTime();
+                                    console.log(`[STATUS MONITOR] Successfully reconnected ${unitName}`);
+                                }
+                            });
+                        }, 1000 * deadConnections); // Stagger reconnections
+                    }
+                }
+                
+                if (deadConnections === 0) {
+                    // All connections appear healthy but status is stuck - force refresh
+                    console.warn(`[STATUS MONITOR] Connections appear healthy but status stuck - forcing data refresh`);
+                    forceDataRefreshAllUnits();
+                }
+            }
+        } else {
+            // Status not stuck - update last successful time
+            lastSuccessfulUpdate = now;
+        }
+        
+        // Also check for completely silent connections (no activity for 5 minutes)
+        if (timeSinceLastUpdate > 300000) { // 5 minutes
+            console.warn(`[STATUS MONITOR] No activity for ${Math.round(timeSinceLastUpdate/1000)}s - forcing complete refresh`);
+            window.location.reload(); // Force page reload as last resort
+        }
+    }, 10000); // Check every 10 seconds
+}
+
+function stopStatusMonitoring() {
+    if (statusMonitorInterval) {
+        clearInterval(statusMonitorInterval);
+        statusMonitorInterval = null;
+    }
+    
+    // Clean up connection health monitoring
+    if (window.connectionHealthInterval) {
+        clearInterval(window.connectionHealthInterval);
+        window.connectionHealthInterval = null;
+    }
+}
+
+// Update the successful update timestamp when data is processed
+function markSuccessfulUpdate() {
+    lastSuccessfulUpdate = Date.now();
+}
+
+// EMERGENCY DIAGNOSTICS: Functions for debugging table update issues
+window.debugTableUpdates = function() {
+    console.log('=== TABLE UPDATE DIAGNOSTICS ===');
+    console.log('isShiftChangeInProgress:', isShiftChangeInProgress);
+    console.log('endTime:', endTime.toISOString());
+    console.log('timePresetValue:', timePresetValue);
+    console.log('WebSocket states:');
+    
+    let healthyConnections = 0;
+    let totalConnections = 0;
+    
+    for (const unitName in unitSockets) {
+        const socket = unitSockets[unitName];
+        totalConnections++;
+        
+        const state = socket ? socket.readyState : 'null';
+        const isInvalid = socket ? socket._isInvalid : 'null';
+        const stateText = socket ? 
+            (socket.readyState === WebSocket.OPEN ? 'OPEN' :
+             socket.readyState === WebSocket.CONNECTING ? 'CONNECTING' :
+             socket.readyState === WebSocket.CLOSING ? 'CLOSING' :
+             socket.readyState === WebSocket.CLOSED ? 'CLOSED' : 'UNKNOWN') : 'NULL';
+             
+        console.log(`  ${unitName}: readyState=${state} (${stateText}), _isInvalid=${isInvalid}`);
+        
+        if (socket && socket.readyState === WebSocket.OPEN && !socket._isInvalid) {
+            healthyConnections++;
+        }
+    }
+    
+    console.log(`Health Summary: ${healthyConnections}/${totalConnections} connections healthy`);
+    console.log('Unit containers:', Object.keys(unitContainers));
+    
+    // Check for recent activity
+    const timeSinceLastUpdate = Date.now() - lastSuccessfulUpdate;
+    console.log(`Time since last successful update: ${Math.round(timeSinceLastUpdate/1000)} seconds`);
+    
+    if (timeSinceLastUpdate > 30000) {
+        console.warn('⚠️ WARNING: No successful updates in over 30 seconds');
+    }
+    
+    console.log('=== END DIAGNOSTICS ===');
+};
+
+window.forceTableRefresh = function() {
+    console.log('=== FORCE TABLE REFRESH ===');
+    if (isShiftChangeInProgress) {
+        console.log('WARNING: isShiftChangeInProgress is true - clearing it');
+        isShiftChangeInProgress = false;
+    }
+    
+    // Update endTime for live data
+    endTime = new Date();
+    console.log('Updated endTime to:', endTime.toISOString());
+    
+    // Force refresh all units
+    forceDataRefreshAllUnits();
+    console.log('=== REFRESH COMPLETE ===');
+};
+
+window.forceReconnectAll = function() {
+    console.log('=== FORCE RECONNECT ALL WEBSOCKETS ===');
+    
+    // Close all existing connections
+    for (const unitName in unitSockets) {
+        const socket = unitSockets[unitName];
+        if (socket) {
+            console.log(`Closing connection for ${unitName}`);
+            try {
+                socket.close(1000, 'Manual reconnection');
+            } catch (e) {
+                console.warn(`Error closing socket for ${unitName}:`, e);
+            }
+        }
+        delete unitSockets[unitName];
+    }
+    
+    // Update endTime for live data
+    endTime = new Date();
+    console.log('Updated endTime to:', endTime.toISOString());
+    
+    // Reconnect all units
+    console.log('Reconnecting all units...');
+    selectedUnits.forEach((unitName, index) => {
+        setTimeout(() => {
+            console.log(`Reconnecting ${unitName}...`);
+            connectHourlyWebSocket(unitName, startTime, endTime, (data) => {
+                if (data) {
+                    createOrUpdateHourlyDataDisplay(unitName, data);
+                    updateLastUpdateTime();
+                    console.log(`Successfully reconnected ${unitName}`);
+                }
+            });
+        }, 1000 * index); // Stagger connections
+    });
+    
+    console.log('=== RECONNECTION INITIATED ===');
+};

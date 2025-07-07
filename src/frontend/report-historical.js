@@ -96,7 +96,7 @@ document.addEventListener('DOMContentLoaded', () => {
     summaryContainer = document.getElementById('summary-container');
 
     // No background tab optimization needed for historical data
-    
+
     // Parse URL parameters
     const params = new URLSearchParams(window.location.search);
     
@@ -298,7 +298,7 @@ function formatDateForDisplay(date) {
 function updateLastUpdateTime() {
     // For historical data, show the historical period instead of current time
     if (lastUpdateTimeElement) {
-        lastUpdateTimeElement.textContent = `Geçmiş veri: ${formatDateForDisplay(endTime)}`;
+    lastUpdateTimeElement.textContent = `Geçmiş veri: ${formatDateForDisplay(endTime)}`;
     }
 }
 
@@ -615,7 +615,7 @@ function updateCharts() {
     
     // Only update production chart if not in drill-down mode
     if (!productionChartDrilldownState.isInDrilldown) {
-        totalSuccessChart.data.labels = unitNames;
+    totalSuccessChart.data.labels = unitNames;
         totalSuccessChart.data.datasets[0].data = unitMetrics.map(m => m.totalSuccess);
     }
     
@@ -633,7 +633,7 @@ function updateCharts() {
     
     // Only update performance chart if not in drill-down mode
     if (!performanceChartDrilldownState.isInDrilldown) {
-        performanceChart.data.labels = unitNames;
+    performanceChart.data.labels = unitNames;
         performanceChart.data.datasets[0].data = unitMetrics.map(m => m.performance);
     }
     

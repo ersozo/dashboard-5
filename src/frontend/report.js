@@ -318,7 +318,7 @@ function updateTimeDisplay() {
     
     // Add live data indicator for live data, or historical indicator for historical data
     if (isLiveData) {
-        timeRangeText = `🟢 Canlı Veri: ${timeRangeText}`;
+    timeRangeText = `🟢 Canlı Veri: ${timeRangeText}`;
     } else {
         timeRangeText = `📊 Geçmiş Veri: ${timeRangeText}`;
     }
@@ -346,13 +346,13 @@ function formatDateForDisplay(date) {
 // Update last update time for live data
 function updateLastUpdateTime() {
     if (lastUpdateTimeElement) {
-        const now = new Date();
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const seconds = String(now.getSeconds()).padStart(2, '0');
-        lastUpdateTimeElement.textContent = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
+    const now = new Date();
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const seconds = String(now.getSeconds()).padStart(2, '0');
+    lastUpdateTimeElement.textContent = `Son güncelleme: ${hours}:${minutes}:${seconds}`;
     }
-
+    
     // Apply flash effect to elements that changed
     const elementsToFlash = [...elementsToFlashOnUpdate]; // Create a copy
     elementsToFlashOnUpdate = []; // Clear the array for next update
@@ -660,16 +660,16 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 } else {
                     // Batch UI updates to prevent excessive redraws
                     requestAnimationFrame(() => {
-                        // Show update indicator
-                        updateIndicator.classList.remove('hidden');
-                        
-                        // Update charts with new data
-                        updateCharts();
-                        updateLastUpdateTime();
-                        
-                        // Hide update indicator after a brief moment
-                        setTimeout(() => {
-                            updateIndicator.classList.add('hidden');
+                    // Show update indicator
+                    updateIndicator.classList.remove('hidden');
+                    
+                    // Update charts with new data
+                    updateCharts();
+                    updateLastUpdateTime();
+                    
+                    // Hide update indicator after a brief moment
+                    setTimeout(() => {
+                        updateIndicator.classList.add('hidden');
                         }, 800);
                     });
                 }
@@ -1022,7 +1022,7 @@ function updateCharts() {
     
     // Only update production chart if not in drill-down mode
     if (!productionChartDrilldownState.isInDrilldown) {
-        totalSuccessChart.data.labels = unitNames;
+    totalSuccessChart.data.labels = unitNames;
         totalSuccessChart.data.datasets[0].data = unitMetrics.map(m => m.totalSuccess);
     }
     
@@ -1040,7 +1040,7 @@ function updateCharts() {
     
     // Only update performance chart if not in drill-down mode
     if (!performanceChartDrilldownState.isInDrilldown) {
-        performanceChart.data.labels = unitNames;
+    performanceChart.data.labels = unitNames;
         performanceChart.data.datasets[0].data = unitMetrics.map(m => m.performance);
     }
     

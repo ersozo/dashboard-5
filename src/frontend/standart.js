@@ -900,8 +900,8 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             if (now - lastRequestTime < 12000) {
                 console.log(`[STANDARD THROTTLE] Skipping request for ${unitName} - too soon (${now - lastRequestTime}ms ago)`);
                 return;
-            }
-            
+        }
+        
             lastRequestTime = now;
             
             // LIVE data view - always show updating indicator
@@ -974,11 +974,11 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 }
             } else {
                 console.log(`[STANDARD ERROR] Connection lost for ${unitName}, clearing interval`);
-                clearInterval(updateInterval);
+                    clearInterval(updateInterval);
                 updateInterval = null;
-            }
+                }
         }, UPDATE_INTERVAL);
-
+        
         console.log(`[STANDARD WEBSOCKET] Connected to ${unitName} with optimized ${UPDATE_INTERVAL}ms interval`);
     };
     
@@ -1056,8 +1056,8 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                     // If it's a subsequent update, update UI directly with batched rendering
                     console.log(`[TABLE UPDATE] Updating UI for subsequent data for "${unitName}"`);
                     requestAnimationFrame(() => {
-                        updateUI();
-                        updateLastUpdateTime();
+                    updateUI();
+                    updateLastUpdateTime();
                         console.log(`[TABLE UPDATE] UI update completed for "${unitName}"`);
                     });
                 }
@@ -1124,16 +1124,16 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             setTimeout(() => {
                 if (!unitSockets[unitName] || unitSockets[unitName].readyState === WebSocket.CLOSED) {
                     console.log(`[STANDARD RECONNECT] Attempting to reconnect ${unitName}`);
-                    connectWebSocket(unitName, startTime, endTime, (data) => {
-                        // Only process data on reconnect, don't call original callback
-                        if (data && data.length > 0) {
-                            processUnitData(unitName, data);
+                connectWebSocket(unitName, startTime, endTime, (data) => {
+                    // Only process data on reconnect, don't call original callback
+                    if (data && data.length > 0) {
+                        processUnitData(unitName, data);
                             requestAnimationFrame(() => {
-                                updateUI();
-                                updateLastUpdateTime();
+                        updateUI();
+                        updateLastUpdateTime();
                             });
-                        }
-                    });
+                    }
+                });
                 }
             }, reconnectDelay);
         } else if (event.code !== 1000 && reconnectAttempts >= maxReconnectAttempts) {
@@ -1428,7 +1428,7 @@ function startTimeUpdates() {
     // OPTIMIZED: Update time display every 3 seconds instead of every second
     // This reduces CPU overhead while still keeping the display reasonably current
     clockUpdateInterval = setInterval(() => {
-        updateTimeDisplay();
+    updateTimeDisplay();
     }, 3000);
     
     console.log('[STANDARD TIME] Started optimized time updates (3s interval)');
