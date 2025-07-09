@@ -581,10 +581,9 @@ function updateUI() {
     console.log(`🎨 UI DEBUG: unitsContainer.children.length:`, unitsContainer ? unitsContainer.children.length : 'unitsContainer is null');
     console.log(`🎨 UI DEBUG: unitData keys:`, Object.keys(unitData));
     
-    // Skip UI updates during shift change to prevent old data from showing
+    // PRODUCTION FIX: Log shift changes but NEVER block UI updates - data freshness is critical
     if (isShiftChangeInProgress) {
-        console.log('[SHIFT CHANGE] Skipping UI update during shift change');
-        return;
+        console.log('[SHIFT CHANGE] UI update proceeding during shift change (NEVER BLOCK)');
     }
     
     // Update summary first (now uses backend-calculated values)
@@ -670,10 +669,9 @@ function createUnitTables(unitDataMap) {
     console.log(`🏗️ TABLE DEBUG: isShiftChangeInProgress:`, isShiftChangeInProgress);
     console.log(`🏗️ TABLE DEBUG: unitsContainer exists?:`, !!unitsContainer);
     
-    // Skip table creation during shift change to prevent old data from showing
+    // PRODUCTION FIX: Log shift changes but NEVER block table creation - data freshness is critical
     if (isShiftChangeInProgress) {
-        console.log('[SHIFT CHANGE] Skipping table creation during shift change');
-        return;
+        console.log('[SHIFT CHANGE] Table creation proceeding during shift change (NEVER BLOCK)');
     }
     
     unitsContainer.innerHTML = '';
@@ -888,9 +886,9 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
         
-        // IMPROVED: Simplified shift change handling - don't defer requests unnecessarily
+        // PRODUCTION FIX: Log shift changes but NEVER block data requests - data freshness is critical
         if (isShiftChangeInProgress) {
-            console.log(`[SHIFT CHANGE] Allowing data request during shift change for "${unitName}" (data freshness priority)`);
+            console.log(`[SHIFT CHANGE] Data request proceeding during shift change for "${unitName}" (NEVER BLOCK)`);
         }
         
         if (unitSocket.readyState === WebSocket.OPEN) {
@@ -994,10 +992,9 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 return;
             }
             
-            // IMPROVED: Allow data processing during shift change but with careful handling
+            // PRODUCTION FIX: Log shift changes but NEVER block data processing - data freshness is critical
             if (isShiftChangeInProgress) {
-                console.log(`[SHIFT CHANGE] Processing data carefully during shift change for "${unitName}"`);
-                // Continue processing but will defer UI updates
+                console.log(`[SHIFT CHANGE] Data processing proceeding during shift change for "${unitName}" (NEVER BLOCK)`);
             }
             
             console.log(`=== STANDARD VIEW DEBUG: DATA RECEIVED FOR ${unitName} ===`);
@@ -1144,9 +1141,9 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
 
 // Update summary with production data
 function updateSummary() {
-    // FIXED: Allow summary updates during shift change - data freshness is more important
+    // PRODUCTION FIX: Log shift changes but NEVER block summary updates - data freshness is critical
     if (isShiftChangeInProgress) {
-        console.log('[SHIFT CHANGE] Proceeding with summary update during shift change (data freshness priority)');
+        console.log('[SHIFT CHANGE] Summary update proceeding during shift change (NEVER BLOCK)');
     }
     
     // Use backend-calculated summary values if available
