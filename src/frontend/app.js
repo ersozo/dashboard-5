@@ -12,9 +12,18 @@ const totalProduction = document.getElementById('total-production');
 const totalQuality = document.getElementById('total-quality');
 const totalPerformance = document.getElementById('total-performance');
 const totalOEE = document.getElementById('total-oee');
-const standardViewBtn = document.getElementById('standard-view-btn');
-const hourlyViewBtn = document.getElementById('hourly-view-btn');
-const reportViewBtn = document.getElementById('report-view-btn');
+// Old button references (no longer used with new live/historical layout)
+// const standardViewBtn = document.getElementById('standard-view-btn');
+// const hourlyViewBtn = document.getElementById('hourly-view-btn');
+// const reportViewBtn = document.getElementById('report-view-btn');
+
+// New button references for live/historical separation
+const hourlyViewLiveBtn = document.getElementById('hourly-view-live-btn');
+const standardViewLiveBtn = document.getElementById('standard-view-live-btn');
+const reportViewLiveBtn = document.getElementById('report-view-live-btn');
+const hourlyViewHistoricalBtn = document.getElementById('hourly-view-historical-btn');
+const standardViewHistoricalBtn = document.getElementById('standard-view-historical-btn');
+const reportViewHistoricalBtn = document.getElementById('report-view-historical-btn');
 
 // Track the selected units
 let selectedUnits = [];
@@ -160,16 +169,17 @@ function formatDateTimeForInput(date) {
 }
 
 // Function to determine if selected time range should be treated as live or historical
-function isLiveDataRequest(startTime, endTime, selectedPreset) {
-    // Decision is based ONLY on the actual end time, not the preset
-    // If end time is recent (within last 5 minutes), treat as live data
-    const now = new Date();
-    const fiveMinutesAgo = new Date(now.getTime() - (5 * 60 * 1000));
-    
-    const isLive = endTime >= fiveMinutesAgo;
-    
-    return isLive;
-}
+// NOTE: This function is no longer used with the new explicit live/historical button layout
+// function isLiveDataRequest(startTime, endTime, selectedPreset) {
+//     // Decision is based ONLY on the actual end time, not the preset
+//     // If end time is recent (within last 5 minutes), treat as live data
+//     const now = new Date();
+//     const fiveMinutesAgo = new Date(now.getTime() - (5 * 60 * 1000));
+//     
+//     const isLive = endTime >= fiveMinutesAgo;
+//     
+//     return isLive;
+// }
 
 // Parse datetime-local input value to Date object
 function parseInputDateTime(inputValue) {
@@ -553,33 +563,30 @@ function handleTimePresetChange(event) {
     startTimeInput.value = formatDateTimeForInput(shiftStartTime);
 }
 
-// Handle standard view button click
-standardViewBtn.addEventListener('click', () => {
+// Helper function to create view URL with parameters (without automatic live/historical logic)
+function createViewUrl(viewType, isLive) {
     // Validate inputs
     const startTime = parseInputDateTime(startTimeInput.value);
     const endTime = parseInputDateTime(endTimeInput.value);
     
     if (!startTime || !endTime) {
         alert('Lütfen geçerli bir başlangıç ve bitiş zamanı seçiniz');
-        return;
+        return null;
     }
     
     // Check 5-day data retention limit
     if (!validateDataRetention(startTime, endTime)) {
-        return;
+        return null;
     }
     
     if (selectedUnits.length === 0) {
         alert('Lütfen en az bir üretim yerini seçiniz');
-        return;
+        return null;
     }
     
     // Get selected preset
     const selectedPreset = document.querySelector('input[name="time-preset"]:checked');
     const presetValue = selectedPreset ? selectedPreset.value : null;
-    
-    // Determine if this should be live or historical data
-    const isLive = isLiveDataRequest(startTime, endTime, presetValue);
     
     // Create URL parameters
     const params = new URLSearchParams();
@@ -604,150 +611,68 @@ standardViewBtn.addEventListener('click', () => {
         params.append('preset', presetValue);
     }
     
-    // Choose the appropriate page based on live vs historical
-    const pageUrl = isLive ? '/standart.html' : '/standart-historical.html';
-    
-    console.log(`[ROUTING] Opening ${isLive ? 'LIVE' : 'HISTORICAL'} standard view: ${pageUrl}`);
-    
-    // Open in new window with explicit _blank target to ensure it always opens in a new window
-    const newWindow = window.open(`${pageUrl}?${params.toString()}`, '_blank');
-    if (newWindow) {
-        // If successful, focus the new window
-        newWindow.focus();
-    } else {
-        // If popup was blocked, alert the user
-        alert('Tarayıcınızda pop-up engellendi. Lütfen bu site için pop-uplara izin veriniz.');
+    // Determine page URL based on view type and explicit live/historical selection
+    let pageUrl;
+    switch (viewType) {
+        case 'standard':
+            pageUrl = isLive ? '/standart.html' : '/standart-historical.html';
+            break;
+        case 'hourly':
+            pageUrl = isLive ? '/hourly.html' : '/hourly-historical.html';
+            break;
+        case 'report':
+            pageUrl = isLive ? '/report' : '/report-historical';
+            break;
+        default:
+            console.error('Unknown view type:', viewType);
+            return null;
     }
+    
+    console.log(`[ROUTING] Opening ${isLive ? 'LIVE' : 'HISTORICAL'} ${viewType} view: ${pageUrl}`);
+    
+    return `${pageUrl}?${params.toString()}`;
+}
+
+// Helper function to open view in new window
+function openView(url) {
+    if (url) {
+        const newWindow = window.open(url, '_blank');
+        if (newWindow) {
+            newWindow.focus();
+        } else {
+            alert('Tarayıcınızda pop-up engellendi. Lütfen bu site için pop-uplara izin veriniz.');
+        }
+    }
+}
+
+// LIVE VIEW EVENT HANDLERS
+standardViewLiveBtn.addEventListener('click', () => {
+    const url = createViewUrl('standard', true);
+    openView(url);
 });
 
-// Handle hourly view button click
-hourlyViewBtn.addEventListener('click', () => {
-    // Validate inputs
-    const startTime = parseInputDateTime(startTimeInput.value);
-    const endTime = parseInputDateTime(endTimeInput.value);
-    
-    if (!startTime || !endTime) {
-        alert('Lütfen geçerli bir başlangıç ve bitiş zamanı seçiniz');
-        return;
-    }
-    
-    // Check 5-day data retention limit
-    if (!validateDataRetention(startTime, endTime)) {
-        return;
-    }
-    
-    if (selectedUnits.length === 0) {
-        alert('Lütfen en az bir üretim yerini seçiniz');
-        return;
-    }
-    
-    // Get selected preset
-    const selectedPreset = document.querySelector('input[name="time-preset"]:checked');
-    const presetValue = selectedPreset ? selectedPreset.value : null;
-    
-    // Determine if this should be live or historical data
-    const isLive = isLiveDataRequest(startTime, endTime, presetValue);
-    
-    // Create URL parameters
-    const params = new URLSearchParams();
-    
-    // Add selected units
-    selectedUnits.forEach(unit => {
-        params.append('units', unit);
-    });
-    
-    // Add time parameters
-    params.append('start', startTime.toISOString());
-    params.append('end', endTime.toISOString());
-    
-    // Add working mode
-    const selectedWorkingMode = document.querySelector('input[name="working-mode"]:checked');
-    if (selectedWorkingMode && selectedWorkingMode.value) {
-        params.append('workingMode', selectedWorkingMode.value);
-    }
-    
-    // Add preset if available
-    if (presetValue) {
-        params.append('preset', presetValue);
-    }
-    
-    // Choose the appropriate page based on live vs historical
-    const pageUrl = isLive ? '/hourly.html' : '/hourly-historical.html';
-    
-    console.log(`[ROUTING] Opening ${isLive ? 'LIVE' : 'HISTORICAL'} hourly view: ${pageUrl}`);
-    
-    // Open in new window with explicit _blank target to ensure it always opens in a new window
-    const newWindow = window.open(`${pageUrl}?${params.toString()}`, '_blank');
-    if (newWindow) {
-        // If successful, focus the new window
-        newWindow.focus();
-    } else {
-        // If popup was blocked, alert the user
-        alert('Tarayıcınızda pop-up engellendi. Lütfen bu site için pop-uplara izin veriniz.');
-    }
+hourlyViewLiveBtn.addEventListener('click', () => {
+    const url = createViewUrl('hourly', true);
+    openView(url);
 });
 
-// Handle report view button click
-reportViewBtn.addEventListener('click', () => {
-    // Validate inputs
-    const startTime = parseInputDateTime(startTimeInput.value);
-    const endTime = parseInputDateTime(endTimeInput.value);
-    
-    if (!startTime || !endTime) {
-        alert('Lütfen geçerli bir başlangıç ve bitiş zamanı seçiniz');
-        return;
-    }
-    
-    // Check 5-day data retention limit
-    if (!validateDataRetention(startTime, endTime)) {
-        return;
-    }
-    
-    if (selectedUnits.length === 0) {
-        alert('Lütfen en az bir üretim yerini seçiniz');
-        return;
-    }
-    
-    // Get selected preset
-    const selectedPreset = document.querySelector('input[name="time-preset"]:checked');
-    const presetValue = selectedPreset ? selectedPreset.value : null;
-    
-    // Determine if this should be live or historical data
-    const isLive = isLiveDataRequest(startTime, endTime, presetValue);
-    
-    // Create URL parameters
-    const params = new URLSearchParams();
-    
-    // Add selected units
-    selectedUnits.forEach(unit => {
-        params.append('units', unit);
-    });
-    
-    // Add time parameters
-    params.append('start', startTime.toISOString());
-    params.append('end', endTime.toISOString());
-    
-    // Add working mode
-    const selectedWorkingMode = document.querySelector('input[name="working-mode"]:checked');
-    if (selectedWorkingMode && selectedWorkingMode.value) {
-        params.append('workingMode', selectedWorkingMode.value);
-    }
-    
-    // Add preset if available
-    if (presetValue) {
-        params.append('preset', presetValue);
-    }
-    
-    // Choose the appropriate page based on live vs historical
-    const pageUrl = isLive ? '/report' : '/report-historical';
-    
-    // Open in new window with explicit _blank target to ensure it always opens in a new window
-    const newWindow = window.open(`${pageUrl}?${params.toString()}`, '_blank');
-    if (newWindow) {
-        // If successful, focus the new window
-        newWindow.focus();
-    } else {
-        // If popup was blocked, alert the user
-        alert('Tarayıcınızda pop-up engellendi. Lütfen bu site için pop-uplara izin veriniz.');
-    }
+reportViewLiveBtn.addEventListener('click', () => {
+    const url = createViewUrl('report', true);
+    openView(url);
+});
+
+// HISTORICAL VIEW EVENT HANDLERS
+standardViewHistoricalBtn.addEventListener('click', () => {
+    const url = createViewUrl('standard', false);
+    openView(url);
+});
+
+hourlyViewHistoricalBtn.addEventListener('click', () => {
+    const url = createViewUrl('hourly', false);
+    openView(url);
+});
+
+reportViewHistoricalBtn.addEventListener('click', () => {
+    const url = createViewUrl('report', false);
+    openView(url);
 });
