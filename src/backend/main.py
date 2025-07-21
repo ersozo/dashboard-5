@@ -505,6 +505,14 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                 data = await websocket.receive_text()
                 params = json.loads(data)
                 
+                # SLOW NETWORK FIX: Handle heartbeat requests
+                if params.get('heartbeat'):
+                    # Send lightweight heartbeat response
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json({"heartbeat": True, "timestamp": time.time()})
+                        print(f"[HEARTBEAT] Sent heartbeat response to {unit_name}")
+                    continue
+                
                 # Fix ISO format strings with 'Z' timezone
                 start_time_str = params['start_time'].replace('Z', '+00:00')
                 end_time_str = params['end_time'].replace('Z', '+00:00')

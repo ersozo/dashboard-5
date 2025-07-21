@@ -660,6 +660,58 @@ function updateUI() {
         }
     }
     console.log(`🎨 UI DEBUG: updateUI() completed`);
+    
+    // SLOW NETWORK FIX: Display connection errors if any
+    displayConnectionErrors();
+}
+
+// SLOW NETWORK FIX: Display connection error messages to users
+function displayConnectionErrors() {
+    const errorContainer = document.getElementById('connection-errors') || createErrorContainer();
+    let hasErrors = false;
+    let errorMessages = [];
+    
+    for (const unit in unitData) {
+        if (unitData[unit] && unitData[unit].connectionError) {
+            hasErrors = true;
+            errorMessages.push(`${unit}: ${unitData[unit].connectionError}`);
+        }
+    }
+    
+    if (hasErrors) {
+        errorContainer.innerHTML = `
+            <div class="bg-yellow-100 border border-yellow-400 text-yellow-800 px-4 py-3 rounded mb-4">
+                <div class="flex items-center">
+                    <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"></path>
+                    </svg>
+                    <strong>Network Connection Issues:</strong>
+                </div>
+                <ul class="mt-2 list-disc list-inside">
+                    ${errorMessages.map(msg => `<li>${msg}</li>`).join('')}
+                </ul>
+                <div class="mt-2 text-sm">
+                    The system will continue trying to reconnect automatically. Please check your network connection.
+                </div>
+            </div>
+        `;
+        errorContainer.classList.remove('hidden');
+    } else {
+        errorContainer.classList.add('hidden');
+    }
+}
+
+function createErrorContainer() {
+    const container = document.createElement('div');
+    container.id = 'connection-errors';
+    container.className = 'hidden';
+    
+    // Insert at the top of the units container
+    if (unitsContainer && unitsContainer.parentNode) {
+        unitsContainer.parentNode.insertBefore(container, unitsContainer);
+    }
+    
+    return container;
 }
 
 // Create tables for each unit
@@ -866,14 +918,51 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     unitSockets[unitName] = unitSocket;
     
     let reconnectAttempts = 0;
-    const maxReconnectAttempts = 5;
+    const maxReconnectAttempts = 10; // SLOW NETWORK FIX: Increased from 5 to 10 attempts
     let updateInterval = null;
     let hasReceivedInitialData = false;
     let lastRequestTime = 0;
+    let heartbeatInterval = null; // SLOW NETWORK FIX: Add heartbeat mechanism
+    let lastHeartbeat = Date.now();
     
     // Pre-calculate reusable values to reduce overhead
     const workingMode = workingModeValue || 'mode1';
     const startTimeISO = startTime.toISOString();
+    
+    // SLOW NETWORK FIX: Add heartbeat mechanism to detect connection issues
+    function startHeartbeat() {
+        heartbeatInterval = setInterval(() => {
+            if (unitSocket.readyState === WebSocket.OPEN) {
+                const now = Date.now();
+                // Check if we haven't received data in the last 60 seconds
+                if (now - lastHeartbeat > 60000) {
+                    console.warn(`[HEARTBEAT] No data received for ${unitName} in 60s - forcing reconnection`);
+                    unitSocket.close(1000, 'Heartbeat timeout');
+                    return;
+                }
+                
+                // Send a lightweight heartbeat request
+                try {
+                    const heartbeatParams = {
+                        start_time: startTimeISO,
+                        end_time: new Date(now).toISOString(),
+                        working_mode: workingMode,
+                        heartbeat: true // Mark as heartbeat request
+                    };
+                    unitSocket.send(JSON.stringify(heartbeatParams));
+                } catch (error) {
+                    console.warn(`[HEARTBEAT] Failed to send heartbeat for ${unitName}:`, error);
+                }
+            }
+        }, 30000); // Send heartbeat every 30 seconds
+    }
+    
+    function stopHeartbeat() {
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+        }
+    }
     
     function sendDataRequest() {
         // Check if this connection is marked as invalid (from previous shift)
@@ -894,12 +983,12 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         if (unitSocket.readyState === WebSocket.OPEN) {
             const now = Date.now();
             
-            // Throttle requests to prevent excessive calls (minimum 12 seconds between requests)
-            if (now - lastRequestTime < 12000) {
+            // SLOW NETWORK FIX: Reduced throttle from 12s to 8s for better responsiveness
+            if (now - lastRequestTime < 8000) {
                 console.log(`[STANDARD THROTTLE] Skipping request for ${unitName} - too soon (${now - lastRequestTime}ms ago)`);
                 return;
-        }
-        
+            }
+            
             lastRequestTime = now;
             
             // LIVE data view - always show updating indicator
@@ -934,10 +1023,10 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         }
     }
     
-    // Set a timeout to ensure we get a callback even if WebSocket fails to connect or is slow
+    // SLOW NETWORK FIX: Increased timeout from 10s to 20s for slow networks
     const connectionTimeout = setTimeout(() => {
         if (!hasReceivedInitialData) {
-            console.warn(`Connection timeout for "${unitName}". Completing with empty data.`);
+            console.warn(`Connection timeout for "${unitName}" after 20 seconds. Completing with empty data.`);
             hasReceivedInitialData = true;
             
             // Ensure we have an entry in unitData even if no data is received
@@ -947,10 +1036,14 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             
             callback([]);
         }
-    }, 10000); // 10 second timeout
+    }, 20000); // SLOW NETWORK FIX: Increased from 10s to 20s
     
     unitSocket.onopen = () => {
         reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+        console.log(`[STANDARD WEBSOCKET] Successfully connected to ${unitName}`);
+        
+        // SLOW NETWORK FIX: Start heartbeat mechanism
+        startHeartbeat();
         
         // Send initial parameters once connected
         sendDataRequest();
@@ -972,9 +1065,9 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 }
             } else {
                 console.log(`[STANDARD ERROR] Connection lost for ${unitName}, clearing interval`);
-                    clearInterval(updateInterval);
+                clearInterval(updateInterval);
                 updateInterval = null;
-                }
+            }
         }, UPDATE_INTERVAL);
         
         console.log(`[STANDARD WEBSOCKET] Connected to ${unitName} with optimized ${UPDATE_INTERVAL}ms interval`);
@@ -984,6 +1077,9 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         console.log(`🚀 FRONTEND: WebSocket message received for "${unitName}"`);
         console.log(`🚀 FRONTEND: Event data exists?`, !!event.data);
         console.log(`🚀 FRONTEND: Event data length:`, event.data ? event.data.length : 'undefined');
+        
+        // SLOW NETWORK FIX: Update heartbeat timestamp
+        lastHeartbeat = Date.now();
         
         try {
             // Check if this connection is marked as invalid (from previous shift)
@@ -1002,6 +1098,12 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             console.log('Raw event data preview:', event.data.substring(0, 200));
             
             const data = JSON.parse(event.data);
+            
+            // SLOW NETWORK FIX: Skip heartbeat responses
+            if (data.heartbeat) {
+                console.log(`[HEARTBEAT] Received heartbeat response for ${unitName}`);
+                return;
+            }
             
             console.log('Parsed data type:', typeof data);
             console.log('Parsed data structure:');
@@ -1030,7 +1132,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                         unitData[unitName] = {};
                     }
                     
-                callback([]);
+                    callback([]);
                 }
             } else {
                 console.log(`STANDARD VIEW: Processing data for "${unitName}"`);
@@ -1053,8 +1155,8 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                     // If it's a subsequent update, update UI directly with batched rendering
                     console.log(`[TABLE UPDATE] Updating UI for subsequent data for "${unitName}"`);
                     requestAnimationFrame(() => {
-                    updateUI();
-                    updateLastUpdateTime();
+                        updateUI();
+                        updateLastUpdateTime();
                         console.log(`[TABLE UPDATE] UI update completed for "${unitName}"`);
                     });
                 }
@@ -1073,7 +1175,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                     unitData[unitName] = {};
                 }
                 
-            callback([]);
+                callback([]);
             }
         }
     };
@@ -1081,6 +1183,9 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     unitSocket.onerror = (error) => {
         console.error(`WebSocket error for "${unitName}":`, error);
         reconnectAttempts++;
+        
+        // SLOW NETWORK FIX: Stop heartbeat on error
+        stopHeartbeat();
         
         // Clean up intervals
         if (updateInterval) {
@@ -1092,11 +1197,14 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         if (!hasReceivedInitialData) {
             hasReceivedInitialData = true;
             clearTimeout(connectionTimeout);
-        callback([]);
+            callback([]);
         }
     };
     
     unitSocket.onclose = (event) => {
+        // SLOW NETWORK FIX: Stop heartbeat on close
+        stopHeartbeat();
+        
         // Clean up intervals
         if (updateInterval) {
             clearInterval(updateInterval);
@@ -1113,28 +1221,35 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             return;
         }
         
-        // Auto-reconnect for unexpected closures
+        // SLOW NETWORK FIX: More aggressive reconnection for slow networks
         if (event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) { // 1000 = normal closure
-            const reconnectDelay = Math.min(3000 * Math.pow(1.5, reconnectAttempts), 20000); // Exponential backoff, max 20s
+            // SLOW NETWORK FIX: Longer delays for slow networks
+            const baseDelay = 5000; // Start with 5 seconds instead of 3
+            const reconnectDelay = Math.min(baseDelay * Math.pow(1.3, reconnectAttempts), 30000); // Max 30s instead of 20s
             console.log(`[STANDARD RECONNECT] Will attempt to reconnect ${unitName} in ${reconnectDelay}ms (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
             
             setTimeout(() => {
                 if (!unitSockets[unitName] || unitSockets[unitName].readyState === WebSocket.CLOSED) {
                     console.log(`[STANDARD RECONNECT] Attempting to reconnect ${unitName}`);
-                connectWebSocket(unitName, startTime, endTime, (data) => {
-                    // Only process data on reconnect, don't call original callback
-                    if (data && data.length > 0) {
-                        processUnitData(unitName, data);
+                    connectWebSocket(unitName, startTime, endTime, (data) => {
+                        // Only process data on reconnect, don't call original callback
+                        if (data && data.length > 0) {
+                            processUnitData(unitName, data);
                             requestAnimationFrame(() => {
-                        updateUI();
-                        updateLastUpdateTime();
+                                updateUI();
+                                updateLastUpdateTime();
                             });
-                    }
-                });
+                        }
+                    });
                 }
             }, reconnectDelay);
         } else if (event.code !== 1000 && reconnectAttempts >= maxReconnectAttempts) {
             console.error(`Failed to connect to WebSocket for "${unitName}" after ${maxReconnectAttempts} attempts`);
+            
+            // SLOW NETWORK FIX: Show user-friendly error message
+            if (unitData[unitName]) {
+                unitData[unitName].connectionError = `Connection failed after ${maxReconnectAttempts} attempts. Please check your network connection.`;
+            }
         }
     };
 }
