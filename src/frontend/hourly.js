@@ -1040,11 +1040,6 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
     }, 15000); // 15 second timeout for hourly data (increased for heavy data processing)
 
     function sendDataRequest() {
-        // PRODUCTION FIX: Log invalid connections but NEVER stop data requests - data freshness is critical
-        if (unitSocket._isInvalid) {
-            console.log(`[SHIFT CHANGE] Continuing data requests despite invalid flag for "${unitName}" (NEVER BLOCK - data freshness priority)`);
-        }
-
         // PRODUCTION FIX: Log shift changes but NEVER block data requests - data freshness is critical
         if (isShiftChangeInProgress) {
             console.log(`[SHIFT CHANGE] Data request proceeding during shift change for "${unitName}" (NEVER BLOCK)`);
@@ -1140,8 +1135,8 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
         const UPDATE_INTERVAL = 12000; // 12 seconds - fastest for hourly view (most critical real-time data)
         
         updateInterval = setInterval(() => {
-            // PRODUCTION FIX: Enhanced connection health check to prevent individual unit freezing
-            if (unitSocket.readyState === WebSocket.OPEN && !unitSocket._isInvalid) {
+            // SIMPLIFIED: Only send requests if connection is open and healthy
+            if (unitSocket.readyState === WebSocket.OPEN) {
                 // For background tabs, skip fewer requests (hourly data is most critical)
                 const shouldSkipRequest = !isTabVisible && Math.random() < 0.15; // Skip only 15% of requests when hidden (less than other views)
                 
@@ -1150,25 +1145,11 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                 } else {
                     console.log(`[HOURLY OPTIMIZATION] Skipping background request for ${unitName}`);
                 }
-            } else if (unitSocket.readyState !== WebSocket.OPEN) {
-                console.warn(`[HOURLY ERROR] Connection lost for ${unitName} (state: ${unitSocket.readyState}), clearing interval and attempting recovery`);
+            } else {
+                console.warn(`[HOURLY ERROR] Connection lost for ${unitName} (state: ${unitSocket.readyState}), clearing interval`);
                 clearInterval(updateInterval);
                 updateInterval = null;
-                
-                // PRODUCTION FIX: Auto-reconnect individual units that lose connection
-                setTimeout(() => {
-                    console.warn(`🔄 [INDIVIDUAL UNIT RECOVERY] Auto-reconnecting ${unitName} after connection loss`);
-                    connectHourlyWebSocket(unitName, startTime, endTime, (data) => {
-                        if (data) {
-                            createOrUpdateHourlyDataDisplay(unitName, data);
-                            updateLastUpdateTime();
-                            console.log(`✅ [INDIVIDUAL UNIT RECOVERY] Successfully reconnected ${unitName}`);
-                        }
-                    });
-                }, 2000); // 2 second delay for auto-recovery
-            } else if (unitSocket._isInvalid) {
-                console.warn(`⚠️ [HOURLY WARNING] Socket marked invalid for ${unitName} but continuing requests (NEVER BLOCK)`);
-                sendDataRequest(); // Continue despite invalid flag
+                // Note: Global recovery system will handle reconnection
             }
         }, UPDATE_INTERVAL);
 
@@ -1198,15 +1179,15 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
 
     unitSocket.onmessage = (event) => {
         try {
-                        // CRITICAL FIX: Clear response timeout when message is received
+            // CRITICAL FIX: Clear response timeout when message is received
             if (unitSocket.responseTimeout) {
                 clearTimeout(unitSocket.responseTimeout);
                 unitSocket.responseTimeout = null;
             }
             
-            // PRODUCTION FIX: Log invalid connections but NEVER block data - data freshness is critical
-            if (unitSocket._isInvalid) {
-                console.log(`[SHIFT CHANGE] Processing data from connection marked invalid for "${unitName}" (NEVER BLOCK - data freshness priority)`);
+            // Update last heartbeat time for connection health monitoring
+            if (unitSocket.heartbeatInterval) {
+                lastHeartbeat = Date.now();
             }
 
             // PRODUCTION FIX: Log shift changes but NEVER block data processing - data freshness is critical
@@ -1383,7 +1364,7 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
         if (!hasReceivedInitialData) {
             hasReceivedInitialData = true;
             clearTimeout(connectionTimeout);
-        callback(null);
+            callback(null);
         }
     };
 
@@ -1516,41 +1497,27 @@ function startStatusMonitoring() {
         clearInterval(statusMonitorInterval);
     }
     
-    // CRITICAL: Add frequent connection health check for heartbeat timeout detection
+    // SIMPLIFIED: Less aggressive connection health monitoring
     const connectionHealthInterval = setInterval(() => {
-        let unhealthyConnections = 0;
         for (const unitName in unitSockets) {
             const socket = unitSockets[unitName];
             
-            // Check for CLOSING or CLOSED states that might not have triggered onclose yet
-            if (!socket || socket.readyState === WebSocket.CLOSING || socket.readyState === WebSocket.CLOSED) {
-                unhealthyConnections++;
-                console.warn(`[CONNECTION HEALTH] Unhealthy connection for ${unitName} (state: ${socket ? socket.readyState : 'null'}) - forcing immediate reconnection`);
+            // Only check for completely CLOSED states (not CLOSING to avoid race conditions)
+            if (!socket || socket.readyState === WebSocket.CLOSED) {
+                console.warn(`[CONNECTION HEALTH] Dead connection detected for ${unitName} - marking for cleanup`);
                 
-                // Immediately clean up and reconnect
+                // Clean up without immediate reconnection (let global recovery handle it)
                 if (socket) {
                     try {
                         socket.close();
                     } catch (e) {
-                        console.warn('Error closing socket:', e);
+                        console.warn('Error closing dead socket:', e);
                     }
                 }
                 delete unitSockets[unitName];
-                
-                // Reconnect immediately
-                setTimeout(() => {
-                    console.log(`[CONNECTION HEALTH] Emergency reconnecting ${unitName}...`);
-                    connectHourlyWebSocket(unitName, startTime, endTime, (data) => {
-                        if (data) {
-                            createOrUpdateHourlyDataDisplay(unitName, data);
-                            updateLastUpdateTime();
-                            console.log(`[CONNECTION HEALTH] Emergency reconnection successful for ${unitName}`);
-                        }
-                    });
-                }, 100 * unhealthyConnections); // Very short delay
             }
         }
-    }, 5000); // Check every 5 seconds for connection health
+    }, 30000); // Check every 30 seconds (much less aggressive)
     
     // Store the interval for cleanup
     window.connectionHealthInterval = connectionHealthInterval;
@@ -1812,43 +1779,43 @@ window.startProductionAutoRecovery = function() {
         const now = Date.now();
         const timeSinceLastUpdate = now - lastSuccessfulUpdate;
         
-        // Auto-fix if no updates for 45 seconds (production critical)
-        if (timeSinceLastUpdate > 45000) {
-            console.warn(`🚨 PRODUCTION AUTO-RECOVERY: No updates for ${Math.round(timeSinceLastUpdate/1000)}s - auto-fixing`);
-            window.quickFixTables();
-        }
-        
-        // PRODUCTION FIX: Check for individual unit freezing every cycle
-        let individualUnitIssues = 0;
-        for (const unitName in unitSockets) {
-            const socket = unitSockets[unitName];
-            if (!socket || socket.readyState !== WebSocket.OPEN || socket._isInvalid) {
-                individualUnitIssues++;
-                console.warn(`🧊 PRODUCTION AUTO-RECOVERY: Individual unit issue detected for ${unitName} (state: ${socket ? socket.readyState : 'null'}, invalid: ${socket ? socket._isInvalid : 'null'})`);
+        // Only auto-fix if no updates for 2 minutes (more conservative)
+        if (timeSinceLastUpdate > 120000) {
+            console.warn(`🚨 PRODUCTION AUTO-RECOVERY: No updates for ${Math.round(timeSinceLastUpdate/1000)}s - performing conservative fix`);
+            
+            // First try a gentle refresh before nuclear option
+            forceDataRefreshAllUnits();
+            
+            // Only call quickFixTables as last resort after 3 minutes
+            if (timeSinceLastUpdate > 180000) {
+                console.warn(`🚨 PRODUCTION AUTO-RECOVERY: Still no updates after 3 minutes - calling quickFixTables`);
+                window.quickFixTables();
             }
         }
         
-        // If individual units are frozen but not all units, fix them specifically
-        if (individualUnitIssues > 0 && individualUnitIssues < Object.keys(unitSockets).length) {
-            console.warn(`🧊 PRODUCTION AUTO-RECOVERY: ${individualUnitIssues} individual units need fixing - applying targeted fix`);
+        // SIMPLIFIED: Only check for completely dead connections (not individual unit issues)
+        let deadConnections = 0;
+        for (const unitName in unitSockets) {
+            const socket = unitSockets[unitName];
+            if (!socket || socket.readyState === WebSocket.CLOSED) {
+                deadConnections++;
+                console.warn(`💀 PRODUCTION AUTO-RECOVERY: Dead connection for ${unitName}`);
+            }
+        }
+        
+        // If more than half connections are dead, fix them
+        const totalConnections = Object.keys(unitSockets).length;
+        if (deadConnections > totalConnections / 2 && deadConnections > 0) {
+            console.warn(`💀 PRODUCTION AUTO-RECOVERY: ${deadConnections}/${totalConnections} connections dead - fixing`);
             window.fixFrozenUnits();
         }
         
-        // Check for stuck shift change flag
+        // Check for stuck shift change flag (this is safe to clear)
         if (isShiftChangeInProgress) {
             console.warn('🚨 PRODUCTION AUTO-RECOVERY: Shift change flag stuck - clearing');
             isShiftChangeInProgress = false;
         }
-        
-        // Check updating indicator stuck
-        if (lastUpdateDisplay && lastUpdateDisplay.innerHTML === 'Güncelleniyor...') {
-            const stuckTime = timeSinceLastUpdate;
-            if (stuckTime > 20000) { // 20 seconds for production
-                console.warn(`🚨 PRODUCTION AUTO-RECOVERY: Updating indicator stuck for ${Math.round(stuckTime/1000)}s - forcing refresh`);
-                forceDataRefreshAllUnits();
-            }
-        }
-    }, 30000); // Check every 30 seconds for production
+    }, 60000); // Check every 60 seconds (less aggressive)
     
     console.log('✅ PRODUCTION AUTO-RECOVERY: Monitoring active');
 };
@@ -1989,11 +1956,7 @@ window.fixFrozenUnits = function() {
             continue;
         }
         
-        if (socket._isInvalid) {
-            console.warn(`⚠️ Unit ${unitName}: Socket marked invalid but will be fixed`);
-            frozenUnits.push(unitName);
-            continue;
-        }
+
         
         console.log(`✅ Unit ${unitName}: Healthy`);
         healthyUnits.push(unitName);
