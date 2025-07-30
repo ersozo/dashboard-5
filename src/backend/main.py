@@ -708,8 +708,33 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 # Get current time in GMT+3
                 current_time = datetime.now(TIMEZONE)
                 
-                # Get all raw data in one query for the entire time range
-                raw_data = get_production_data(unit_name, start_time, end_time, current_time, working_mode)
+                # Basic request logging
+                print(f"[HOURLY] Processing request for {unit_name}")
+                
+                # Get all raw data in one query for the entire time range with timeout protection
+                print(f"[HOURLY QUERY] Starting database query for {unit_name}: {start_time} to {end_time}")
+                try:
+                    # Add timeout protection for large queries
+                    raw_data = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None, 
+                            lambda: get_production_data(unit_name, start_time, end_time, current_time, working_mode)
+                        ), 
+                        timeout=30.0  # 30 second timeout
+                    )
+                    print(f"[HOURLY QUERY] Database query completed for {unit_name}")
+                except asyncio.TimeoutError:
+                    print(f"[HOURLY ERROR] Database query timeout for {unit_name} - query took longer than 30 seconds")
+                    error_response = {"error": "Database query timeout - try a smaller time range"}
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json(error_response)
+                    continue
+                except Exception as db_error:
+                    print(f"[HOURLY ERROR] Database error for {unit_name}: {str(db_error)}")
+                    error_response = {"error": f"Database error: {str(db_error)}"}
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json(error_response)
+                    continue
                 
                 # Calculate totals from raw data first
                 total_success = sum(model['success_qty'] for model in raw_data)
@@ -777,7 +802,7 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     # Calculate overall OEE (set to None as per requirement #3)
                     total_oee = None
                 else:
-                    print("No models with target found")
+                    pass  # No models with target found
                 
                 # Process hourly data hour by hour (same approach as historical hourly endpoint)
                 hourly_data = []
@@ -788,13 +813,17 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 actual_end_time_for_hourly = end_time
                 if current_time:
                     time_difference = current_time - end_time
+                    abs_time_difference = abs(time_difference.total_seconds())
                     five_minutes = timedelta(minutes=5)
-                    is_live_data = time_difference <= five_minutes
+                    # Consider it live data if end_time is within 5 minutes of current_time (past or future)
+                    is_live_data = abs_time_difference <= five_minutes.total_seconds()
                     
                     # FIXED: For live data, extend the processing to current_time to include current hour
                     if is_live_data:
                         actual_end_time_for_hourly = current_time
-                        print(f"[HOURLY DEBUG] Live data detected - extending end_time from {end_time} to {current_time}")
+                        print(f"[HOURLY] Live data detected for {unit_name}")
+                    else:
+                        print(f"[HOURLY] Historical data for {unit_name}")
                 
                 while current_hour < actual_end_time_for_hourly:
                     hour_end = current_hour + timedelta(hours=1)
@@ -803,7 +832,6 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     if is_live_data and current_time > current_hour and current_time < hour_end:
                         # This is the current hour in live data - use current_time as hour_end
                         hour_end = current_time
-                        print(f"[HOURLY DEBUG] Current hour detected: {current_hour.strftime('%H:%M')} - using current_time as hour_end: {hour_end.strftime('%H:%M')}")
                     else:
                         # For historical data or completed hours, use the regular hour boundary or actual_end_time_for_hourly
                         hour_end = min(hour_end, actual_end_time_for_hourly)
@@ -815,7 +843,6 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     if is_current_hour:
                         # Never cache current hour in live data - always fetch fresh
                         hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
-                        print(f"[HOURLY LIVE] Fresh data for current hour {unit_name} {current_hour.strftime('%H:%M')} (no cache)")
                     else:
                         # Cache historical hours to reduce database load
                         cache_key = f"{unit_name}_{current_hour.isoformat()}_{hour_end.isoformat()}_{working_mode}"
@@ -825,7 +852,6 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                             current_timestamp - hourly_data_cache[cache_key]['timestamp'] < cache_duration):
                             # Use cached data (significantly faster)
                             hour_data = hourly_data_cache[cache_key]['data']
-                            print(f"[HOURLY CACHE] Using cached data for {unit_name} hour {current_hour.strftime('%H:%M')}")
                         else:
                             # Get fresh data from database (maintains exact same business logic)
                             hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
@@ -835,7 +861,6 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                                 'data': hour_data,
                                 'timestamp': current_timestamp
                             }
-                            print(f"[HOURLY CACHE] Fetched fresh data for {unit_name} hour {current_hour.strftime('%H:%M')}")
                         
                         # Clean up old cache entries to prevent memory growth
                         keys_to_remove = []
@@ -879,7 +904,7 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                             # Calculate performance
                             hour_performance = hour_actual_qty / hour_theoretical_qty if hour_theoretical_qty > 0 else 0
                     
-                    hourly_data.append({
+                    hour_record = {
                         'hour_start': current_hour.isoformat(),
                         'hour_end': hour_end.isoformat(),
                         'success_qty': hour_success,
@@ -889,15 +914,14 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                         'performance': hour_performance,
                         'oee': 0,  # OEE set to 0 as per requirements
                         'theoretical_qty': hour_theoretical_qty
-                    })
+                    }
                     
-                    print(f"[HOURLY DEBUG] Added hour: {current_hour.strftime('%H:%M')}-{hour_end.strftime('%H:%M')} | Success: {hour_success} | Fail: {hour_fail}")
+                    hourly_data.append(hour_record)
                     
                     # Move to next hour - but for live data current hour, advance to the next hour boundary
                     if is_live_data and hour_end == current_time:
                         # For current hour in live data, move to next hour boundary to prevent infinite loop
                         current_hour = current_hour + timedelta(hours=1)
-                        print(f"[HOURLY DEBUG] Current hour processed, moving to next hour boundary: {current_hour.strftime('%H:%M')}")
                     else:
                         current_hour = hour_end
                 

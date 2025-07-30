@@ -648,6 +648,12 @@ function createOrUpdateHourlyDataDisplay(unitName, data) {
 
     console.log(`Processing hourly display for "${unitName}" with ${data.hourly_data.length} records`);
     console.log(`Summary totals: success=${data.total_success}, fail=${data.total_fail}, total=${data.total_qty}`);
+    
+    // DEBUG: Log all hourly records received
+    console.log(`[FRONTEND DEBUG] Raw hourly_data for ${unitName}:`, data.hourly_data);
+    data.hourly_data.forEach((hour, i) => {
+        console.log(`[FRONTEND DEBUG] Hour ${i}: ${hour.hour_start} → ${hour.hour_end} | Success: ${hour.success_qty} | Fail: ${hour.fail_qty}`);
+    });
 
     // Check if container for this unit already exists
     if (unitContainers[unitName]) {
@@ -915,11 +921,23 @@ function updateTableBody(tableBody, hourlyData) {
         }
     });
 
+    // DEBUG: Log each hour before filtering
+    console.log(`[FRONTEND DEBUG] Before filtering - ${hourDataCopy.length} hours:`);
+    hourDataCopy.forEach((hour, i) => {
+        console.log(`[FRONTEND DEBUG] Hour ${i}: start=${hour.hour_start} (${hour._startDate}) | end=${hour.hour_end} (${hour._endDate})`);
+    });
+
     // Filter out invalid hours
-    const validHours = hourDataCopy.filter(hour =>
-        hour._startDate instanceof Date && !isNaN(hour._startDate) &&
-        hour._endDate instanceof Date && !isNaN(hour._endDate)
-    );
+    const validHours = hourDataCopy.filter(hour => {
+        const isValid = hour._startDate instanceof Date && !isNaN(hour._startDate) &&
+                       hour._endDate instanceof Date && !isNaN(hour._endDate);
+        if (!isValid) {
+            console.warn(`[FRONTEND DEBUG] Invalid hour filtered out:`, hour);
+        }
+        return isValid;
+    });
+
+    console.log(`[FRONTEND DEBUG] After filtering - ${validHours.length} valid hours`);
 
     if (validHours.length === 0) {
         console.warn('No valid hour records found after validation');
@@ -935,6 +953,12 @@ function updateTableBody(tableBody, hourlyData) {
 
     // Sort hours in descending order (newest hour first)
     validHours.sort((a, b) => b._startDate - a._startDate);
+    
+    // DEBUG: Log final sorted hours
+    console.log(`[FRONTEND DEBUG] Final sorted hours:`);
+    validHours.forEach((hour, i) => {
+        console.log(`[FRONTEND DEBUG] Sorted ${i}: ${hour.hour_start} → ${hour.hour_end} | Success: ${hour.success_qty}`);
+    });
 
     // Get current time to highlight current hour
     const now = new Date();
@@ -1069,8 +1093,9 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                 endTime = currentTime; // Update global endTime for shift-based live data
                 console.log(`[HOURLY LIVE] Shift-based view detected - extending endTime from ${oldEndTime} to ${endTime.toISOString()}`);
             } else {
-                // For non-shift views, use original logic
+                // For non-shift views, use current time for live data requests
                 requestEndTime = currentTime;
+                console.log(`[HOURLY LIVE] Using current time for live data request: ${requestEndTime.toISOString()}`);
             }
 
             // Send parameters to request new data - ALWAYS use fresh start_time for live data
@@ -1082,6 +1107,10 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
 
             console.log(`[HOURLY REQUEST] ${unitName}: ${isShiftBasedView ? 'Shift-based live' : 'Live'} data request`);
             console.log(`[HOURLY REQUEST] Time range: ${params.start_time} → ${params.end_time}`);
+            console.log(`[HOURLY REQUEST] Local current time: ${new Date().toISOString()}`);
+            console.log(`[HOURLY REQUEST] Global startTime: ${startTime.toISOString()}`);
+            console.log(`[HOURLY REQUEST] Global endTime: ${endTime.toISOString()}`);
+            console.log(`[HOURLY REQUEST] Working mode: ${workingMode}`);
 
             try {
             unitSocket.send(JSON.stringify(params));
@@ -1238,20 +1267,40 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                     data.hourly_data.forEach(hour => {
                         const startTime = new Date(hour.hour_start);
                         const endTime = new Date(hour.hour_end);
-                        console.log(`${startTime.getHours()}:00-${endTime.getHours()}:00: Success=${hour.success_qty}, Fail=${hour.fail_qty}, Quality=${hour.quality !== null && hour.quality !== undefined ? (hour.quality * 100).toFixed(0) : 'N/A'}%`);
+                        const startDisplay = `${startTime.getHours().toString().padStart(2, '0')}:${startTime.getMinutes().toString().padStart(2, '0')}`;
+                        const endDisplay = `${endTime.getHours().toString().padStart(2, '0')}:${endTime.getMinutes().toString().padStart(2, '0')}`;
+                        console.log(`${startDisplay}-${endDisplay}: Success=${hour.success_qty}, Fail=${hour.fail_qty}, Quality=${hour.quality !== null && hour.quality !== undefined ? (hour.quality * 100).toFixed(0) : 'N/A'}%`);
                     });
 
-                    // Find current hour
+                    // Find current hour with proper timezone handling
                     const now = new Date();
+                    console.log(`[CURRENT HOUR DEBUG] Current time: ${now.toISOString()} (${now.toString()})`);
+                    
                     const currentHour = data.hourly_data.find(h => {
                         const hourStart = new Date(h.hour_start);
                         const hourEnd = new Date(h.hour_end);
-                        return hourStart <= now && now < hourEnd;
+                        
+                        // Add 30-second tolerance to handle race conditions where current time 
+                        // might be slightly after hour_end due to network/processing delays
+                        const toleranceMs = 30 * 1000; // 30 seconds
+                        const hourEndWithTolerance = new Date(hourEnd.getTime() + toleranceMs);
+                        
+                        console.log(`[CURRENT HOUR DEBUG] Checking hour: ${hourStart.toISOString()} - ${hourEnd.toISOString()} (tolerance: +30s)`);
+                        console.log(`[CURRENT HOUR DEBUG] Comparison: ${hourStart.toISOString()} <= ${now.toISOString()} < ${hourEndWithTolerance.toISOString()}`);
+                        const result = hourStart <= now && now < hourEndWithTolerance;
+                        console.log(`[CURRENT HOUR DEBUG] Result: ${hourStart <= now} && ${now < hourEndWithTolerance} = ${result}`);
+                        
+                        return result;
                     });
 
                     if (currentHour) {
-                        console.log('Current hour data:', {
-                            time: `${new Date(currentHour.hour_start).getHours()}:00-${new Date(currentHour.hour_end).getHours()}:00`,
+                        const currentStartTime = new Date(currentHour.hour_start);
+                        const currentEndTime = new Date(currentHour.hour_end);
+                        const currentStartDisplay = `${currentStartTime.getHours().toString().padStart(2, '0')}:${currentStartTime.getMinutes().toString().padStart(2, '0')}`;
+                        const currentEndDisplay = `${currentEndTime.getHours().toString().padStart(2, '0')}:${currentEndTime.getMinutes().toString().padStart(2, '0')}`;
+                        
+                        console.log('✅ Current hour found:', {
+                            time: `${currentStartDisplay}-${currentEndDisplay}`,
                             success_qty: currentHour.success_qty,
                             fail_qty: currentHour.fail_qty,
                             quality: currentHour.quality !== null && currentHour.quality !== undefined ? (currentHour.quality * 100).toFixed(0) + '%' : 'N/A',
@@ -1259,7 +1308,7 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                             oee: currentHour.oee !== null && currentHour.oee !== undefined ? (currentHour.oee * 100).toFixed(0) + '%' : 'N/A'
                         });
                     } else {
-                        console.warn('No current hour found in hourly data');
+                        console.warn('❌ No current hour found in hourly data');
                     }
 
                     // Compare with previous data if exists
@@ -1387,9 +1436,11 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
         }
 
         // Handle reconnection logic for unexpected closures
-        const shouldReconnect = !event.wasClean && reconnectAttempts < maxReconnectAttempts;
+        // CRITICAL FIX: Heartbeat timeouts should trigger reconnection even if wasClean=true
+        const isHeartbeatTimeout = event.reason === 'Heartbeat timeout';
+        const shouldReconnect = (!event.wasClean || isHeartbeatTimeout) && reconnectAttempts < maxReconnectAttempts;
         
-        console.log(`[RECONNECT DEBUG] wasClean: ${event.wasClean}, reason: "${event.reason}", shouldReconnect: ${shouldReconnect}`);
+        console.log(`[RECONNECT DEBUG] wasClean: ${event.wasClean}, reason: "${event.reason}", isHeartbeatTimeout: ${isHeartbeatTimeout}, shouldReconnect: ${shouldReconnect}`);
 
         if (shouldReconnect) {
             console.log(`Attempting to reconnect for ${unitName}, attempt ${reconnectAttempts + 1}/${maxReconnectAttempts}`);
@@ -1426,6 +1477,8 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             callback(null);
         } else if (!shouldReconnect && event.wasClean && !isHeartbeatTimeout) {
             console.log(`[CLEAN CLOSE] WebSocket closed cleanly for ${unitName} - no reconnection needed`);
+        } else if (isHeartbeatTimeout && !shouldReconnect) {
+            console.warn(`[HEARTBEAT TIMEOUT] Max reconnection attempts reached for ${unitName} after heartbeat timeout`);
         }
     };
 }
