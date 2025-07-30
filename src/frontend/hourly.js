@@ -1014,14 +1014,51 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
     unitSockets[unitName] = unitSocket;
 
     let reconnectAttempts = 0;
-    const maxReconnectAttempts = 5;
+    const maxReconnectAttempts = 10; // HEARTBEAT TIMEOUT FIX: Increased from 5 to 10 attempts
     let updateInterval = null;
     let hasReceivedInitialData = false;
     let lastRequestTime = 0;
+    let heartbeatInterval = null; // HEARTBEAT TIMEOUT FIX: Add heartbeat mechanism
+    let lastHeartbeat = Date.now();
     
     // Pre-calculate reusable values to reduce overhead
     const workingMode = workingModeValue || 'mode1';
     const startTimeISO = startTime.toISOString();
+    
+    // HEARTBEAT TIMEOUT FIX: Add heartbeat mechanism to detect connection issues
+    function startHeartbeat() {
+        heartbeatInterval = setInterval(() => {
+            if (unitSocket.readyState === WebSocket.OPEN) {
+                const now = Date.now();
+                // Check if we haven't received data in the last 60 seconds
+                if (now - lastHeartbeat > 60000) {
+                    console.warn(`[HOURLY HEARTBEAT] No data received for ${unitName} in 60s - forcing reconnection`);
+                    unitSocket.close(1000, 'Heartbeat timeout');
+                    return;
+                }
+                
+                // Send a lightweight heartbeat request
+                try {
+                    const heartbeatParams = {
+                        start_time: startTimeISO,
+                        end_time: new Date(now).toISOString(),
+                        working_mode: workingMode,
+                        heartbeat: true // Mark as heartbeat request
+                    };
+                    unitSocket.send(JSON.stringify(heartbeatParams));
+                } catch (error) {
+                    console.warn(`[HOURLY HEARTBEAT] Failed to send heartbeat for ${unitName}:`, error);
+                }
+            }
+        }, 30000); // Send heartbeat every 30 seconds
+    }
+    
+    function stopHeartbeat() {
+        if (heartbeatInterval) {
+            clearInterval(heartbeatInterval);
+            heartbeatInterval = null;
+        }
+    }
 
     // Set a timeout to ensure we get a callback even if WebSocket fails to connect
     const connectionTimeout = setTimeout(() => {
@@ -1126,6 +1163,9 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
         console.log(`Hourly WebSocket connection established for "${unitName}"`);
         reconnectAttempts = 0; // Reset reconnect attempts on successful connection
 
+        // HEARTBEAT TIMEOUT FIX: Start heartbeat mechanism
+        startHeartbeat();
+
         // Send initial parameters once connected
         sendDataRequest();
 
@@ -1225,6 +1265,12 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
 
             // Try to parse the data
             const data = JSON.parse(event.data);
+
+            // HEARTBEAT TIMEOUT FIX: Skip heartbeat responses
+            if (data.heartbeat) {
+                console.log(`[HOURLY HEARTBEAT] Received heartbeat response for ${unitName}`);
+                return;
+            }
 
             // Check if response contains an error
             if (data.error) {
@@ -1368,37 +1414,49 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
 
     unitSocket.onerror = (error) => {
         console.error(`Hourly WebSocket error for ${unitName}:`, error);
+        reconnectAttempts++;
 
-        // Clean up intervals and heartbeat
+        // HEARTBEAT TIMEOUT FIX: Stop heartbeat on error
+        stopHeartbeat();
+
+        // Clean up intervals
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
-        if (unitSocket.heartbeatInterval) {
-            clearInterval(unitSocket.heartbeatInterval);
-            unitSocket.heartbeatInterval = null;
-        }
 
         // Count as completed but with no data
-        callback(null);
+        if (!hasReceivedInitialData) {
+            hasReceivedInitialData = true;
+            clearTimeout(connectionTimeout);
+            callback(null);
+        }
     };
 
     unitSocket.onclose = (event) => {
         console.log(`Hourly WebSocket closed for ${unitName}:`, event);
 
-        // Clean up intervals and heartbeat
+        // HEARTBEAT TIMEOUT FIX: Stop heartbeat on close
+        stopHeartbeat();
+
+        // Clean up intervals
         if (updateInterval) {
             clearInterval(updateInterval);
             updateInterval = null;
         }
-        if (unitSocket.heartbeatInterval) {
-            clearInterval(unitSocket.heartbeatInterval);
-            unitSocket.heartbeatInterval = null;
+
+        // Make sure we call callback if we haven't received initial data yet
+        if (!hasReceivedInitialData) {
+            hasReceivedInitialData = true;
+            clearTimeout(connectionTimeout);
+            callback(null);
+            return;
         }
 
-        // CRITICAL FIX: Treat heartbeat timeout (code 1000) as requiring reconnection
-        const isHeartbeatTimeout = event.reason && event.reason.includes('timeout');
-        const shouldReconnect = (!event.wasClean || isHeartbeatTimeout) && reconnectAttempts < maxReconnectAttempts;
+        // HEARTBEAT TIMEOUT FIX: Better heartbeat timeout detection and handling
+        const isHeartbeatTimeout = (event.reason && event.reason.toLowerCase().includes('timeout')) || 
+                                   (event.reason && event.reason.toLowerCase().includes('heartbeat'));
+        const shouldReconnect = (event.code !== 1000 || isHeartbeatTimeout) && reconnectAttempts < maxReconnectAttempts;
         
         console.log(`[RECONNECT DEBUG] wasClean: ${event.wasClean}, reason: "${event.reason}", isHeartbeatTimeout: ${isHeartbeatTimeout}, shouldReconnect: ${shouldReconnect}`);
 
@@ -1406,8 +1464,9 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             console.log(`Attempting to reconnect for ${unitName}, attempt ${reconnectAttempts + 1}/${maxReconnectAttempts}`);
             reconnectAttempts++;
 
-            // OPTIMIZED: Exponential backoff with reasonable limits for hourly data
-            const reconnectDelay = Math.min(5000 * Math.pow(1.5, reconnectAttempts), 30000); // Exponential backoff, max 30s
+            // HEARTBEAT TIMEOUT FIX: Longer delays for slow networks, similar to standard view
+            const baseDelay = 5000; // Start with 5 seconds
+            const reconnectDelay = Math.min(baseDelay * Math.pow(1.3, reconnectAttempts), 30000); // Max 30s for slow networks
 
             console.log(`[HOURLY RECONNECT] Will attempt to reconnect ${unitName} in ${reconnectDelay}ms (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
 
@@ -1427,7 +1486,13 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             }, reconnectDelay);
         } else if (shouldReconnect === false && reconnectAttempts >= maxReconnectAttempts) {
             console.error(`Failed to connect to WebSocket for ${unitName} after ${maxReconnectAttempts} attempts`);
-            alert(`Failed to connect to ${unitName}. Please try again later.`);
+            
+            // HEARTBEAT TIMEOUT FIX: Set connection error for display instead of alert
+            if (!hourlyDataGlobal[unitName]) {
+                hourlyDataGlobal[unitName] = {};
+            }
+            hourlyDataGlobal[unitName].connectionError = `Connection failed after ${maxReconnectAttempts} attempts. Please check your network connection.`;
+            
             callback(null);
         } else if (!shouldReconnect && event.wasClean && !isHeartbeatTimeout) {
             console.log(`[CLEAN CLOSE] WebSocket closed cleanly for ${unitName} - no reconnection needed`);
