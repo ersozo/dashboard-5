@@ -927,8 +927,8 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     print(f"[HOURLY WARNING] Connection closed before sending response to {unit_name}")
                     break
                     
-                # OPTIMIZED: Faster sleep for real-time hourly updates with caching
-                await asyncio.sleep(8)  # 8 seconds - faster with caching to reduce load
+                # PERFORMANCE FIX: Balanced sleep for hourly updates - not too fast to avoid overload
+                await asyncio.sleep(12)  # 12 seconds - balanced for performance and responsiveness
             except WebSocketDisconnect:
                 print(f"[HOURLY INFO] WebSocket disconnected for {unit_name}")
                 break

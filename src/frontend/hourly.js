@@ -589,31 +589,38 @@ function loadHourlyData() {
         hourlyDataContainer.className = 'grid grid-cols-1 md:grid-cols-2 gap-4 w-full';
     }
 
-    // Create connections for each selected unit
+    // Create connections for each selected unit with staggering to reduce server load
     let completedRequests = 0;
 
-    selectedUnits.forEach(unit => {
-        // Connect to WebSocket for hourly data
-        connectHourlyWebSocket(unit, startTime, endTime, (data) => {
-            // Process data for this unit
-            createOrUpdateHourlyDataDisplay(unit, data);
+    selectedUnits.forEach((unit, index) => {
+        // Stagger connections by 2 seconds each to prevent server overload
+        const connectionDelay = index * 2000;
+        
+        setTimeout(() => {
+            console.log(`[CONNECTION STAGGER] Starting connection for ${unit} (delay: ${connectionDelay}ms)`);
+            
+            // Connect to WebSocket for hourly data
+            connectHourlyWebSocket(unit, startTime, endTime, (data) => {
+                // Process data for this unit
+                createOrUpdateHourlyDataDisplay(unit, data);
 
-            // Track completed requests for initial loading
-            completedRequests++;
+                // Track completed requests for initial loading
+                completedRequests++;
 
-            // When all initial requests are done, hide loading
-            if (completedRequests === selectedUnits.length) {
-                // Hide loading indicator
-                loadingIndicator.classList.add('hidden');
-                // Update the last update time
-                updateLastUpdateTime();
-                // Start status monitoring
-                startStatusMonitoring();
-                // PRODUCTION FIX: Start aggressive auto-recovery system
-                window.startProductionAutoRecovery();
-                console.log('🚀 PRODUCTION: Auto-recovery system activated');
-            }
-        });
+                // When all initial requests are done, hide loading
+                if (completedRequests === selectedUnits.length) {
+                    // Hide loading indicator
+                    loadingIndicator.classList.add('hidden');
+                    // Update the last update time
+                    updateLastUpdateTime();
+                    // Start status monitoring
+                    startStatusMonitoring();
+                    // PRODUCTION FIX: Start aggressive auto-recovery system
+                    window.startProductionAutoRecovery();
+                    console.log('🚀 PRODUCTION: Auto-recovery system activated');
+                }
+            });
+        }, connectionDelay);
     });
 }
 
@@ -1030,7 +1037,7 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
             hasReceivedInitialData = true;
             callback(null);
         }
-    }, 8000); // 8 second timeout for hourly data (faster for better responsiveness)
+    }, 15000); // 15 second timeout for hourly data (increased for heavy data processing)
 
     function sendDataRequest() {
         // PRODUCTION FIX: Log invalid connections but NEVER stop data requests - data freshness is critical
@@ -1089,14 +1096,14 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                 }
                 
                 unitSocket.responseTimeout = setTimeout(() => {
-                    console.warn(`[STATUS FIX] No response received for ${unitName} within 20 seconds - checking connection`);
+                    console.warn(`[STATUS FIX] No response received for ${unitName} within 30 seconds - checking connection`);
                     
                     // Check if socket is still open but not responding
                     if (unitSocket.readyState === WebSocket.OPEN) {
                         console.warn(`[STATUS FIX] Socket appears open but unresponsive for ${unitName} - forcing reconnection`);
                         unitSocket.close(1000, 'Response timeout');
                     }
-                }, 20000); // 20 second response timeout
+                }, 30000); // 30 second response timeout (increased for heavy hourly data processing)
             } catch (error) {
                 console.error(`[STATUS FIX] Failed to send WebSocket message for ${unitName}:`, error);
                 // Force connection reset on send error
