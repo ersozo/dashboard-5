@@ -1073,14 +1073,15 @@ function connectHourlyWebSocket(unitName, startTime, endTime, callback) {
                 requestEndTime = currentTime;
             }
 
-            // Send parameters to request new data
+            // Send parameters to request new data - ALWAYS use fresh start_time for live data
             const params = {
-                start_time: startTimeISO, // Reuse pre-calculated value
+                start_time: startTime.toISOString(), // Always use current start_time (not cached)
                 end_time: requestEndTime.toISOString(),
                 working_mode: workingMode // Reuse pre-calculated value
             };
 
-            console.log(`[HOURLY REQUEST] ${unitName}: ${isShiftBasedView ? 'Shift-based live' : 'Live'} data request - endTime: ${requestEndTime.toISOString()}`);
+            console.log(`[HOURLY REQUEST] ${unitName}: ${isShiftBasedView ? 'Shift-based live' : 'Live'} data request`);
+            console.log(`[HOURLY REQUEST] Time range: ${params.start_time} → ${params.end_time}`);
 
             try {
             unitSocket.send(JSON.stringify(params));

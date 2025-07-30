@@ -677,7 +677,7 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
 
 # ROBUST OPTIMIZATION: Add simple caching to reduce database load for hourly data
 hourly_data_cache = {}
-cache_duration = 30  # Cache for 30 seconds to balance performance and freshness
+cache_duration = 10  # Reduced to 10 seconds for better live data freshness
 
 # WebSocket endpoint for hourly data
 @app.websocket("/ws/hourly/{unit_name}")
@@ -808,27 +808,34 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                         # For historical data or completed hours, use the regular hour boundary or actual_end_time_for_hourly
                         hour_end = min(hour_end, actual_end_time_for_hourly)
                     
-                    # ROBUST OPTIMIZATION: Use smart caching to reduce database calls
-                    # Create cache key for this specific hour query
-                    cache_key = f"{unit_name}_{current_hour.isoformat()}_{hour_end.isoformat()}_{working_mode}"
+                    # SMART CACHING: Don't cache current hour for live data to ensure freshness
                     current_timestamp = time.time()
+                    is_current_hour = (is_live_data and current_time > current_hour and current_time < hour_end)
                     
-                    # Check if we have recent cached data for this exact query
-                    if (cache_key in hourly_data_cache and 
-                        current_timestamp - hourly_data_cache[cache_key]['timestamp'] < cache_duration):
-                        # Use cached data (significantly faster)
-                        hour_data = hourly_data_cache[cache_key]['data']
-                        print(f"[HOURLY CACHE] Using cached data for {unit_name} hour {current_hour.strftime('%H:%M')}")
-                    else:
-                        # Get fresh data from database (maintains exact same business logic)
+                    if is_current_hour:
+                        # Never cache current hour in live data - always fetch fresh
                         hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
+                        print(f"[HOURLY LIVE] Fresh data for current hour {unit_name} {current_hour.strftime('%H:%M')} (no cache)")
+                    else:
+                        # Cache historical hours to reduce database load
+                        cache_key = f"{unit_name}_{current_hour.isoformat()}_{hour_end.isoformat()}_{working_mode}"
                         
-                        # Cache the result for future requests
-                        hourly_data_cache[cache_key] = {
-                            'data': hour_data,
-                            'timestamp': current_timestamp
-                        }
-                        print(f"[HOURLY CACHE] Fetched fresh data for {unit_name} hour {current_hour.strftime('%H:%M')}")
+                        # Check if we have recent cached data for this exact query
+                        if (cache_key in hourly_data_cache and 
+                            current_timestamp - hourly_data_cache[cache_key]['timestamp'] < cache_duration):
+                            # Use cached data (significantly faster)
+                            hour_data = hourly_data_cache[cache_key]['data']
+                            print(f"[HOURLY CACHE] Using cached data for {unit_name} hour {current_hour.strftime('%H:%M')}")
+                        else:
+                            # Get fresh data from database (maintains exact same business logic)
+                            hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
+                            
+                            # Cache the result for future requests (only for historical hours)
+                            hourly_data_cache[cache_key] = {
+                                'data': hour_data,
+                                'timestamp': current_timestamp
+                            }
+                            print(f"[HOURLY CACHE] Fetched fresh data for {unit_name} hour {current_hour.strftime('%H:%M')}")
                         
                         # Clean up old cache entries to prevent memory growth
                         keys_to_remove = []
