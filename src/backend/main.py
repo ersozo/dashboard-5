@@ -689,14 +689,6 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                 data = await websocket.receive_text()
                 params = json.loads(data)
                 
-                # SLOW NETWORK FIX: Handle heartbeat requests for hourly endpoint
-                if params.get('heartbeat'):
-                    # Send lightweight heartbeat response
-                    if websocket.client_state.name == 'CONNECTED':
-                        await websocket.send_json({"heartbeat": True, "timestamp": time.time()})
-                        print(f"[HOURLY HEARTBEAT] Sent heartbeat response to {unit_name}")
-                    continue
-                
                 # Fix ISO format strings with 'Z' timezone
                 start_time_str = params['start_time'].replace('Z', '+00:00')
                 end_time_str = params['end_time'].replace('Z', '+00:00')
@@ -927,22 +919,12 @@ async def hourly_websocket_endpoint(websocket: WebSocket, unit_name: str):
                     if hour_data['oee'] is None:
                         hour_data['oee'] = 0
                 
-                # HEARTBEAT TIMEOUT FIX: More robust connection checking before sending
-                try:
-                    if websocket.client_state.name == 'CONNECTED':
-                        await websocket.send_json(response_data)
-                        print(f"[HOURLY SUCCESS] Sent response to {unit_name} with {len(hourly_data)} hours")
-                    else:
-                        print(f"[HOURLY WARNING] Connection closed before sending response to {unit_name}")
-                        break
-                except Exception as send_err:
-                    # Handle heartbeat timeout and connection errors during send
-                    send_error_msg = str(send_err).lower()
-                    if ('heartbeat timeout' in send_error_msg or 'connection closed' in send_error_msg or 
-                        '1000' in send_error_msg or '1011' in send_error_msg):
-                        print(f"[HOURLY INFO] Normal connection closure during send to {unit_name}: {str(send_err)}")
-                    else:
-                        print(f"[HOURLY ERROR] Failed to send response to {unit_name}: {str(send_err)}")
+                # Check if connection is still open before sending
+                if websocket.client_state.name == 'CONNECTED':
+                    await websocket.send_json(response_data)
+                    print(f"[HOURLY SUCCESS] Sent response to {unit_name} with {len(hourly_data)} hours")
+                else:
+                    print(f"[HOURLY WARNING] Connection closed before sending response to {unit_name}")
                     break
                     
                 # OPTIMIZED: Faster sleep for real-time hourly updates with caching
