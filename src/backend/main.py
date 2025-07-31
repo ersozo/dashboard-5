@@ -245,8 +245,25 @@ async def get_report_data(units: str, start_time: str, end_time: str, working_mo
         total_success_weight = 0
         
         for unit_name in unit_list:
-            # Get production data for this unit
-            production_data = get_production_data(unit_name, start_time, end_time, current_time, working_mode)
+            # Get production data for this unit with timeout protection
+            print(f"[REPORT] Starting database query for unit {unit_name}")
+            try:
+                production_data = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None, 
+                        lambda unit=unit_name: get_production_data(unit, start_time, end_time, current_time, working_mode)
+                    ), 
+                    timeout=30.0  # 30 second timeout per unit
+                )
+                print(f"[REPORT] Database query completed for unit {unit_name}")
+            except asyncio.TimeoutError:
+                print(f"[REPORT ERROR] Database query timeout for unit {unit_name} - skipping unit")
+                # Skip this unit and continue with others
+                continue
+            except Exception as db_error:
+                print(f"[REPORT ERROR] Database error for unit {unit_name}: {str(db_error)} - skipping unit")
+                # Skip this unit and continue with others
+                continue
             
             # Calculate unit totals
             unit_success = sum(model['success_qty'] for model in production_data)
@@ -325,8 +342,23 @@ async def get_historical_data(unit_name: str, start_time: str, end_time: str, wo
         # Get current time in GMT+3
         current_time = datetime.now(TIMEZONE)
         
-        # Get production data
-        production_data = get_production_data(unit_name, start_time, end_time, current_time, working_mode)
+        # Get production data with timeout protection
+        print(f"[HISTORICAL] Starting database query for unit {unit_name}")
+        try:
+            production_data = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None, 
+                    lambda: get_production_data(unit_name, start_time, end_time, current_time, working_mode)
+                ), 
+                timeout=30.0  # 30 second timeout
+            )
+            print(f"[HISTORICAL] Database query completed for unit {unit_name}")
+        except asyncio.TimeoutError:
+            print(f"[HISTORICAL ERROR] Database query timeout for unit {unit_name}")
+            raise HTTPException(status_code=504, detail="Database query timeout - try a smaller time range")
+        except Exception as db_error:
+            print(f"[HISTORICAL ERROR] Database error for unit {unit_name}: {str(db_error)}")
+            raise HTTPException(status_code=500, detail=f"Database error: {str(db_error)}")
         
         # Calculate totals
         total_success = sum(model['success_qty'] for model in production_data)
@@ -414,8 +446,27 @@ async def get_historical_hourly_data(unit_name: str, start_time: str, end_time: 
         while current_hour < end_time:
             hour_end = min(current_hour + timedelta(hours=1), end_time)
             
-            # Get data for this specific hour
-            hour_data = get_production_data(unit_name, current_hour, hour_end, current_time, working_mode)
+            # Get data for this specific hour with timeout protection
+            print(f"[HISTORICAL HOURLY] Starting database query for unit {unit_name}, hour {current_hour.strftime('%H:%M')}")
+            try:
+                hour_data = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None, 
+                        lambda hour_start=current_hour, hour_end_copy=hour_end: get_production_data(unit_name, hour_start, hour_end_copy, current_time, working_mode)
+                    ), 
+                    timeout=30.0  # 30 second timeout per hour
+                )
+                print(f"[HISTORICAL HOURLY] Database query completed for unit {unit_name}, hour {current_hour.strftime('%H:%M')}")
+            except asyncio.TimeoutError:
+                print(f"[HISTORICAL HOURLY ERROR] Database query timeout for unit {unit_name}, hour {current_hour.strftime('%H:%M')} - skipping hour")
+                # Skip this hour and continue with next hour
+                current_hour = hour_end
+                continue
+            except Exception as db_error:
+                print(f"[HISTORICAL HOURLY ERROR] Database error for unit {unit_name}, hour {current_hour.strftime('%H:%M')}: {str(db_error)} - skipping hour")
+                # Skip this hour and continue with next hour
+                current_hour = hour_end
+                continue
             
             # Calculate hourly totals
             hour_success = sum(model['success_qty'] for model in hour_data)
@@ -532,8 +583,30 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                 # Get current time in GMT+3
                 current_time = datetime.now(TIMEZONE)
                 
-                # Get production data and filter models with target
-                production_data = get_production_data(unit_name, start_time, end_time, current_time, working_mode)
+                # Get production data with timeout protection
+                print(f"[STANDARD QUERY] Starting database query for {unit_name}: {start_time} to {end_time}")
+                try:
+                    # Add timeout protection for large queries
+                    production_data = await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None, 
+                            lambda: get_production_data(unit_name, start_time, end_time, current_time, working_mode)
+                        ), 
+                        timeout=30.0  # 30 second timeout
+                    )
+                    print(f"[STANDARD QUERY] Database query completed for {unit_name}")
+                except asyncio.TimeoutError:
+                    print(f"[STANDARD ERROR] Database query timeout for {unit_name} - query took longer than 30 seconds")
+                    error_response = {"error": "Database query timeout - try a smaller time range"}
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json(error_response)
+                    continue
+                except Exception as db_error:
+                    print(f"[STANDARD ERROR] Database error for {unit_name}: {str(db_error)}")
+                    error_response = {"error": f"Database error: {str(db_error)}"}
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_json(error_response)
+                    continue
                                
                 # For each model, if it has no target, set performance and OEE to None
                 for model in production_data:
@@ -638,7 +711,7 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
             except Exception as e:
                 # Filter out normal WebSocket connection closures - these are expected
                 error_msg = str(e).lower()
-                if ('keepalive ping timeout' in error_msg or '1011' in error_msg or 
+                if ('keepalive ping timeout' in error_msg or 'heartbeat timeout' in error_msg or '1011' in error_msg or 
                     'connection closed' in error_msg or '1005' in error_msg or 
                     'no status received' in error_msg):
                     # Normal WebSocket connection closure - log at lower level
@@ -658,15 +731,15 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                 except Exception as send_err:
                     # Filter out normal connection closed errors for send failures too
                     send_error_msg = str(send_err).lower()
-                    if ('keepalive ping timeout' not in send_error_msg and '1011' not in send_error_msg and 
-                        'connection closed' not in send_error_msg and '1005' not in send_error_msg and 
+                    if ('keepalive ping timeout' not in send_error_msg and 'heartbeat timeout' not in send_error_msg and 
+                        '1011' not in send_error_msg and 'connection closed' not in send_error_msg and '1005' not in send_error_msg and 
                         'no status received' not in send_error_msg):
                         print(f"[STANDARD ERROR] Failed to send error response to {unit_name}: {str(send_err)}")
                     break
     except Exception as e:
         # Filter out normal WebSocket connection closures for outer exceptions too
         error_msg = str(e).lower()
-        if ('keepalive ping timeout' in error_msg or '1011' in error_msg or 
+        if ('keepalive ping timeout' in error_msg or 'heartbeat timeout' in error_msg or '1011' in error_msg or 
             'connection closed' in error_msg or '1005' in error_msg or 
             'no status received' in error_msg):
             print(f"[STANDARD INFO] Outer WebSocket connection closed (normal): {e}")
