@@ -590,12 +590,18 @@ function updateUI() {
     console.log(`🎨 UI DEBUG: Calling updateSummary()`);
     updateSummary();
     
-    // Check if tables exist - if not, create them
-    if (unitsContainer.children.length === 0) {
-        console.log(`🎨 UI DEBUG: No existing tables, calling createUnitTables()`);
+    // Check if actual unit tables exist - if not, create them
+    // Count actual unit containers (not error messages)
+    const unitContainers = Array.from(unitsContainer.children).filter(child => 
+        child.id && child.id.startsWith('unit-'));
+    
+    if (unitContainers.length === 0) {
+        console.log(`🎨 UI DEBUG: No existing unit tables (${unitsContainer.children.length} total children), calling createUnitTables()`);
+        // Clear any existing error messages before creating new tables
+        unitsContainer.innerHTML = '';
         createUnitTables(unitData);
     } else {
-        console.log(`🎨 UI DEBUG: Tables exist, updating existing tables`);
+        console.log(`🎨 UI DEBUG: Unit tables exist (${unitContainers.length} units), updating existing tables`);
         // Otherwise update existing tables
         for (const unit in unitData) {
             const models = unitData[unit].models;
