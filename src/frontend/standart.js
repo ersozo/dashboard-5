@@ -1000,8 +1000,22 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             // LIVE data view - always show updating indicator
             showUpdatingIndicator();
             
-            // For live data, use current time as request end time (optimized)
-            const requestEndTime = new Date(now);
+            // CRITICAL FIX: For shift-based views, always use current time to get latest data
+            const currentTime = new Date(now);
+            const isShiftBasedView = timePresetValue && timePresetValue.startsWith('shift');
+            
+            let requestEndTime;
+            if (isShiftBasedView) {
+                // For shift-based views, always use current time and update global endTime
+                requestEndTime = currentTime;
+                const oldEndTime = endTime.toISOString();
+                endTime = currentTime; // Update global endTime for shift-based live data
+                console.log(`[STANDARD LIVE] Shift-based view detected - extending endTime from ${oldEndTime} to ${endTime.toISOString()}`);
+            } else {
+                // For non-shift views, use current time for live data requests
+                requestEndTime = currentTime;
+                console.log(`[STANDARD LIVE] Using current time for live data request: ${requestEndTime.toISOString()}`);
+            }
             
             // Send parameters to request new data - ALWAYS use fresh start_time for live data
             const params = {
@@ -1057,8 +1071,8 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
         // Send initial parameters once connected
         sendDataRequest();
         
-        // OPTIMIZED INTERVAL SYSTEM - Use balanced approach
-        const UPDATE_INTERVAL = 18000; // 18 seconds - balanced for standard view
+        // OPTIMIZED INTERVAL SYSTEM - Aligned with hourly view for consistency
+        const UPDATE_INTERVAL = 12000; // 12 seconds - same as hourly view for live data consistency
         
         updateInterval = setInterval(() => {
             // Only send request if connection is still open
