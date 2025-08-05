@@ -927,7 +927,6 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     
     // Pre-calculate reusable values to reduce overhead
     const workingMode = workingModeValue || 'mode1';
-    const startTimeISO = startTime.toISOString();
     
     // SLOW NETWORK FIX: Add heartbeat mechanism to detect connection issues
     function startHeartbeat() {
@@ -944,7 +943,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 // Send a lightweight heartbeat request
                 try {
                     const heartbeatParams = {
-                        start_time: startTimeISO,
+                        start_time: startTime.toISOString(), // Always use current start_time for heartbeat
                         end_time: new Date(now).toISOString(),
                         working_mode: workingMode,
                         heartbeat: true // Mark as heartbeat request
@@ -967,10 +966,11 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     function sendDataRequest() {
         // Check if this connection is marked as invalid (from previous shift)
         if (unitSocket._isInvalid) {
-            console.log(`[SHIFT CHANGE] Stopping data requests from invalid connection for "${unitName}"`);
+            console.warn(`[SHIFT CHANGE] Stopping data requests from invalid connection for "${unitName}" - connection marked invalid`);
             if (updateInterval) {
                 clearInterval(updateInterval);
                 updateInterval = null;
+                console.warn(`[SHIFT CHANGE] Cleared update interval for invalid connection "${unitName}"`);
             }
             return;
         }
@@ -997,14 +997,17 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             // For live data, use current time as request end time (optimized)
             const requestEndTime = new Date(now);
             
-            // Send parameters to request new data
+            // Send parameters to request new data - ALWAYS use fresh start_time for live data
             const params = {
-                start_time: startTimeISO, // Reuse pre-calculated value
+                start_time: startTime.toISOString(), // Always use current start_time (not cached)
                 end_time: requestEndTime.toISOString(),
                 working_mode: workingMode // Reuse pre-calculated value
             };
             
-            console.log(`[STANDARD REQUEST] ${unitName}: Live data request`);
+            console.log(`[STANDARD REQUEST] ${unitName}: Time range: ${params.start_time} → ${params.end_time}`);
+            console.log(`[STANDARD REQUEST] ${unitName}: Local current time: ${new Date().toISOString()}`);
+            console.log(`[STANDARD REQUEST] ${unitName}: Global startTime: ${startTime.toISOString()}`);
+            console.log(`[STANDARD REQUEST] ${unitName}: Working mode: ${workingMode}`);
             unitSocket.send(JSON.stringify(params));
         } else {
             console.warn(`Cannot send update request - socket not open for "${unitName}", readyState: ${unitSocket.readyState}`);
@@ -1057,6 +1060,8 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
                 // For background tabs, skip some requests to reduce server load
                 // but still maintain reasonable update frequency
                 const shouldSkipRequest = !isTabVisible && Math.random() < 0.25; // Skip 25% of requests when hidden
+                
+                console.log(`[STANDARD INTERVAL] ${unitName}: tabVisible=${isTabVisible}, shouldSkip=${shouldSkipRequest}`);
                 
                 if (!shouldSkipRequest) {
                     sendDataRequest();
@@ -1454,10 +1459,10 @@ function forceDataRefreshAllUnits() {
         if (socket && socket.readyState === WebSocket.OPEN && !socket._isInvalid) {
             console.log(`[VISIBILITY] Forcing data refresh for unit: ${unitName}`);
             
-            // LIVE data view - always refresh
+            // LIVE data view - always refresh with current times
             const requestEndTime = new Date();
             const params = {
-                start_time: startTime.toISOString(),
+                start_time: startTime.toISOString(), // Always use fresh start time
                 end_time: requestEndTime.toISOString(),
                 working_mode: workingModeValue || 'mode1'
             };
