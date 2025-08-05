@@ -554,7 +554,6 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
     
     // Pre-calculate reusable values to reduce overhead
     const workingMode = workingModeValue || 'mode1';
-    const startTimeISO = startTime.toISOString();
     
     function sendDataRequest() {
         if (unitSocket.readyState === WebSocket.OPEN) {
@@ -571,7 +570,7 @@ function connectWebSocket(unitName, startTime, endTime, callback) {
             // For live data, use current time as end time (optimized)
             const currentEndTime = new Date(now);
             const params = {
-                start_time: startTimeISO, // Reuse pre-calculated value
+                start_time: startTime.toISOString(), // Always use fresh start time (not cached)
                 end_time: currentEndTime.toISOString(),
                 working_mode: workingMode // Reuse pre-calculated value
             };
