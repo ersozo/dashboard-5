@@ -695,8 +695,8 @@ async def websocket_endpoint(websocket: WebSocket, unit_name: str):
                     print(f"[STANDARD WARNING] Connection closed before sending response to {unit_name}")
                     break
                     
-                # FIXED: Much shorter sleep for real-time standard updates  
-                await asyncio.sleep(10)  # 10 seconds instead of 30 for responsive real-time updates
+                # ALIGNED: Match the hourly view sleep interval for consistency
+                await asyncio.sleep(12)  # 12 seconds - same as hourly view for consistent timing
             except WebSocketDisconnect:
                 print(f"[STANDARD INFO] WebSocket disconnected for {unit_name}")
                 break

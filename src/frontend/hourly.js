@@ -141,30 +141,22 @@ function forceDataRefreshAllUnits() {
         if (socket && socket.readyState === WebSocket.OPEN && !socket._isInvalid) {
             console.log(`[VISIBILITY] Forcing data refresh for unit: ${unitName}`);
 
-            // Check if this is historical data using centralized function
-            const isHistorical = isDataHistorical();
+            // LIVE data view - always refresh with current times (no historical check needed)
+            const requestEndTime = new Date();
+            const params = {
+                start_time: startTime.toISOString(),
+                end_time: requestEndTime.toISOString(),
+                working_mode: workingModeValue || 'mode1'
+            };
 
-            console.log(`[VISIBILITY] Unit ${unitName} - isHistorical: ${isHistorical}`);
+            console.log(`[VISIBILITY] Sending refresh request for ${unitName}:`, {
+                start: params.start_time,
+                end: params.end_time,
+                working_mode: params.working_mode
+            });
 
-            if (!isHistorical) {
-                const requestEndTime = new Date();
-                const params = {
-                    start_time: startTime.toISOString(),
-                    end_time: requestEndTime.toISOString(),
-                    working_mode: workingModeValue || 'mode1'
-                };
-
-                console.log(`[VISIBILITY] Sending refresh request for ${unitName}:`, {
-                    start: params.start_time,
-                    end: params.end_time,
-                    working_mode: params.working_mode
-                });
-
-                socket.send(JSON.stringify(params));
-                refreshCount++;
-            } else {
-                console.log(`[VISIBILITY] Skipping refresh for ${unitName} - data is historical`);
-            }
+            socket.send(JSON.stringify(params));
+            refreshCount++;
         } else {
             console.log(`[VISIBILITY] Skipping ${unitName} - socket not ready (state: ${socket ? socket.readyState : 'null'})`);
         }
@@ -1524,23 +1516,7 @@ window.forceLiveMode = function() {
     return debugTimeStatus();
 };
 
-// Centralized function to check if data is historical (for historical data views end time is less than 5 minutes before current time)
-function isDataHistorical() {
-    if (!endTime) return false;
 
-    // CRITICAL FIX: For shift-based views, always treat as live data
-    const isShiftBasedView = timePresetValue && timePresetValue.startsWith('shift');
-    if (isShiftBasedView) {
-        console.log('[HOURLY LIVE] Shift-based view detected - treating as live data');
-        return false; // Always live for shift-based views
-    }
-
-    const now = new Date();
-    const timeDifference = now.getTime() - endTime.getTime();
-    const fiveMinutesInMs = 5 * 60 * 1000;
-
-    return timeDifference > fiveMinutesInMs;
-}
 
 // CRITICAL FIX: Global status monitoring system to prevent permanent freezing
 let shiftChangeStartTime = null;

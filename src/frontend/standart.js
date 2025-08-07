@@ -1407,7 +1407,7 @@ function forceDataRefreshAllUnits() {
         if (socket && socket.readyState === WebSocket.OPEN && !socket._isInvalid) {
             console.log(`[VISIBILITY] Forcing data refresh for unit: ${unitName}`);
             
-            // LIVE data view - always refresh with current times
+            // LIVE data view - always refresh with current times (no historical check needed)
             const requestEndTime = new Date();
             const params = {
                 start_time: startTime.toISOString(), // Always use fresh start time
@@ -1431,11 +1431,18 @@ function forceDataRefreshAllUnits() {
     // Show update indicator only if we actually sent refresh requests
     if (refreshCount > 0) {
         showUpdatingIndicator();
-        // Auto-hide after longer delay for batch operations
+        // Auto-hide after standard delay for standard view operations
         setTimeout(() => {
-            updateIndicator.classList.add('hidden');
+            document.getElementById('loading-indicator').classList.add('hidden');
         }, 2000);
     }
+    
+    // Force UI update after data refresh
+    requestAnimationFrame(() => {
+        updateUI();
+        updateLastUpdateTime();
+        console.log('[VISIBILITY] Forced UI update after data refresh');
+    });
 }
 
 // Optimized interval management for background tabs
